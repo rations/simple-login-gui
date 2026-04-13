@@ -1,0 +1,29 @@
+#!/bin/sh
+
+[ "$(tty)" = "/dev/tty1" ] || exit 1
+
+dmesg -n 1
+
+export HOME=/root
+export USER=root
+export LOGNAME=root
+export PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+export LIBSEAT_BACKEND=seatd
+
+seatd -u root -g video &
+SEATD_PID=$!
+sleep 0.5
+
+exec /usr/bin/Xorg :0 vt1 -seat seat0 -keeptty -nolisten tcp &
+XORG_PID=$!
+
+until xset q >/dev/null 2>&1; do
+    sleep 0.2
+done
+
+export DISPLAY=:0
+
+exec /usr/local/bin/xlogin
+
+kill $XORG_PID
+kill $SEATD_PID

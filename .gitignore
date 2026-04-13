@@ -1,0 +1,13 @@
+# Build artifacts
+xlogin
+*.o
+*.so
+*.a
+
+# Kilo operational files
+/.kilo/
+
+# Editor backups
+*~
+*.swp
+*.swo
