@@ -52,8 +52,9 @@ sudo adduser root video
 ## Installation
 
 ### Install from Release (Recommended)
-Since you already have the release tarball extracted:
+
 ```bash
+tar -xf simple-login-gui.tar.gz
 sudo ./install.sh
 ```
 
