@@ -1,6 +1,6 @@
 # simple-login-gui
 
-Minimal GTK3 login manager for Devuan Excalibur + xlibre + seatd. No elogind, no systemd.
+Minimal GTK3 login manager for Devuan Excalibur + xlibre + seatd. No systemd, no polkit, no ConsoleKit2.
 
 ---
 
@@ -36,15 +36,12 @@ EOF
 
 sudo apt-get update
 sudo apt-get install xlibre xlibre-archive-keyring
-
-# For AMD GPUs:
-sudo apt-get -t excalibur-backports install firmware-amd-graphics
 ```
 
 ### 3. Install seatd
 ```bash
 sudo apt-get install seatd libseat1
-sudo adduser root video
+sudo adduser video
 ```
 
 ---
@@ -55,12 +52,14 @@ sudo adduser root video
 
 ```bash
 tar -xf simple-login-gui.tar.gz
+cd simple-login-gui
 sudo ./install.sh
 ```
 
 ### Automated Install (from source)
 ```bash
 git clone https://github.com/rations/simple-login-gui.git
+cd simple-login-gui
 sudo ./install.sh
 ```
 
@@ -77,6 +76,8 @@ sudo make install
 ```
 
 ### Enable login manager
+
+**For sysvinit (Devuan Excalibur):**
 ```bash
 sudo nano /etc/inittab
 ```
@@ -85,7 +86,6 @@ Comment out getty on tty1 and add xlogin-launcher:
 #1:2345:respawn:/sbin/getty 38400 tty1
 1:2345:respawn:/usr/local/bin/xlogin-launcher
 ```
-
 
 ---
 
@@ -103,25 +103,20 @@ echo "exec jwm" > ~/.xinitrc
 chmod +x ~/.xinitrc
 ```
 
----
-
 ## Logout behaviour
 When user logs out from window manager, you will be automatically returned to the login screen.
 
 ---
 
-
 ## Security
 - Correct privilege dropping order: `setgid()` → `initgroups()` → `setuid()`
 - Full environment sanitization executed *before* privilege changes
-- PAM session kept open for full user session lifetime
+- PAM session properly closed on logout
 - All inherited file descriptors closed before user execution
 - Password memory securely wiped after authentication
 - No setuid GTK execution path
 - Runtime directory created with correct 0700 permissions
 - Non-interactive PAM flags to prevent hangs
-
----
 
 ## Uninstall
 ```bash

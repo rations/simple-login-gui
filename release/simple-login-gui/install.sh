@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 if [ "$(id -u)" != "0" ]; then
@@ -46,7 +46,7 @@ fi
 
 # Install binaries
 echo "Installing binaries..."
-if install -m 755 xlogin /usr/local/bin/ && install -m 755 xlogin-launcher /usr/local/bin/; then
+if install -m 4750 xlogin /usr/local/bin/ && install -m 755 xlogin-launcher /usr/local/bin/; then
     echo "✓ Binaries installed successfully"
 else
     echo "✗ Failed to install binaries"
@@ -61,9 +61,19 @@ else
     exit 1
 fi
 
+# Install init.d script
+if install -m 755 etc_init.d_xlogin-launcher /etc/init.d/xlogin-launcher; then
+    echo "✓ Init.d script installed successfully"
+else
+    echo "✗ Failed to install init.d script"
+    exit 1
+fi
+
 # Configure inittab
 if ! grep -q xlogin-launcher /etc/inittab; then
     echo "Updating /etc/inittab..."
+    # Backup inittab
+    cp /etc/inittab /etc/inittab.backup.$(date +%Y%m%d_%H%M%S)
     if sed -i 's/^1:2345:respawn:\/sbin\/getty/#1:2345:respawn:\/sbin\/getty/' /etc/inittab && \
        echo "1:2345:respawn:/usr/local/bin/xlogin-launcher" >> /etc/inittab; then
         echo "✓ inittab updated successfully"
@@ -75,15 +85,15 @@ else
     echo "✓ inittab already configured (xlogin-launcher entry found)"
 fi
 
-# Add root to video group
-if adduser root video; then
-    echo "✓ Added root to video group"
+# Reload inittab
+echo "Reloading inittab..."
+if telinit q; then
+    echo "✓ Inittab reloaded successfully"
 else
-    echo "⚠ Warning: Failed to add root to video group (may already be added)"
+    echo "✗ Failed to reload inittab"
+    exit 1
 fi
 
 echo ""
-echo "🎉 Installation complete!"
-echo "Please reboot to activate the login manager."
-echo ""
-echo "Note: Local build files have been preserved in case you need to troubleshoot."
+echo "Installation complete!"
+echo "Please log out to activate the login manager."

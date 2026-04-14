@@ -11,7 +11,7 @@ $(TARGET): $(SRC)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 install: all
-	install -m 4755 $(TARGET) /usr/local/bin/
+	install -m 4750 $(TARGET) /usr/local/bin/
 	install -m 755 xlogin-launcher /usr/local/bin/
 	install -m 644 pam.d/xlogin /etc/pam.d/
 

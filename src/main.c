@@ -137,10 +137,14 @@ static gboolean launch_session(gpointer user_data) {
         int status;
         waitpid(pid, &status, 0);
 
-        // Session ended, redisplay login
+         // Session ended, redisplay login
         update_status("", FALSE);
-        // Cleanup PAM session after user logged out
-        pam_end(pamh, PAM_SUCCESS);
+        // Session ended, clean up PAM session
+        if (pamh != NULL) {
+            pam_close_session(pamh, 0);
+            pam_end(pamh, PAM_SUCCESS);
+            pamh = NULL;
+        }
         
         // Securely wipe password from memory
         gtk_entry_set_text(GTK_ENTRY(password_entry), "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
@@ -214,6 +218,12 @@ static void on_entry_activate(GtkEntry *entry, gpointer user_data) {
     }
 }
 
+static void handle_sigchld(int sig) {
+    (void)sig;
+    // Reap zombie child processes
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+}
+
 static void sig_handler(int sig) {
     (void)sig;
     gtk_main_quit();
@@ -224,6 +234,9 @@ int main(int argc, char *argv[]) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGHUP, &sa, NULL);
+
+    struct sigaction sa_chld = {.sa_handler = handle_sigchld, .sa_flags = SA_NOCLDSTOP};
+    sigaction(SIGCHLD, &sa_chld, NULL);
 
     gtk_init(&argc, &argv);
 

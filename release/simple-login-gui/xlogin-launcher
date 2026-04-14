@@ -1,29 +1,60 @@
 #!/bin/sh
+set -e
 
-[ "$(tty)" = "/dev/tty1" ] || exit 1
+# Check if we're in a graphical environment
+if [ -z "$DISPLAY" ]; then
+    # Try to find current VT
+    CURRENT_VT=$(who -r 2>/dev/null | awk '{print $3}' || echo "unknown")
+    if [ "$CURRENT_VT" = "unknown" ]; then
+        echo "No graphical environment or VT found"
+        exit 1
+    fi
+fi
 
-dmesg -n 1
+# Check if Xorg is already running
+if pgrep -x Xorg > /dev/null 2>&1; then
+    echo "Xorg already running"
+    exit 0
+fi
 
+# Check if seatd is already running
+if pgrep -x seatd > /dev/null 2>&1; then
+    echo "seatd already running"
+else
+    # Start seatd if not running
+    if [ "$1" = "--no-seatd" ]; then
+        echo "Skipping seatd start"
+    else
+        seatd --user seatd --group seatd &
+        SEATD_PID=$!
+        sleep 0.5
+    fi
+fi
+
+# Set up environment
 export HOME=/root
 export USER=root
 export LOGNAME=root
 export PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 export LIBSEAT_BACKEND=seatd
 
-seatd -u root -g video &
-SEATD_PID=$!
-sleep 0.5
+# Find the correct VT
+if [ -z "$DISPLAY" ]; then
+    export DISPLAY=:0
+fi
 
-exec /usr/bin/Xorg :0 vt1 -seat seat0 -keeptty -nolisten tcp &
-XORG_PID=$!
+# Start Xorg if not running
+if ! pgrep -x Xorg > /dev/null 2>&1; then
+    exec /usr/bin/Xorg :0 vt$(echo $CURRENT_VT | sed 's/tty//') -seat seat0 -keeptty -nolisten tcp &
+    XORG_PID=$!
 
-until xset q >/dev/null 2>&1; do
-    sleep 0.2
-done
+    # Wait for X to be ready
+    until xset q >/dev/null 2>&1; do
+        sleep 0.2
+    done
+fi
 
 export DISPLAY=:0
 
+# Launch xlogin
 exec /usr/local/bin/xlogin
-
-kill $XORG_PID
-kill $SEATD_PID
