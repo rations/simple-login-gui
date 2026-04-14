@@ -53,7 +53,8 @@ sudo adduser root video
 
 ### Automated Install (Recommended)
 ```bash
-wget https://github.com/yourrepo/simple-login-gui/releases/latest/download/install.sh
+git clone https://github.com/yourrepo/simple-login-gui.git
+cd simple-login-gui
 chmod +x install.sh
 sudo ./install.sh
 ```
