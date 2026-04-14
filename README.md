@@ -53,7 +53,7 @@ sudo adduser root video
 
 ### Automated Install (Recommended)
 ```bash
-git clone https://github.com/yourrepo/simple-login-gui.git
+git clone https://github.com/rations/simple-login-gui.git
 cd simple-login-gui
 chmod +x install.sh
 sudo ./install.sh
@@ -81,7 +81,6 @@ Comment out getty on tty1 and add xlogin-launcher:
 1:2345:respawn:/usr/local/bin/xlogin-launcher
 ```
 
-Reboot. System will boot directly to graphical login screen.
 
 ---
 
@@ -106,13 +105,16 @@ When user logs out from window manager, you will be automatically returned to th
 
 ---
 
+
 ## Security
-- Correct privilege dropping order
-- Full environment sanitization
-- PAM session lifecycle correctly handled
-- All file descriptors closed before user execution
-- Password memory securely wiped
-- No setuid GTK execution
+- Correct privilege dropping order: `setgid()` → `initgroups()` → `setuid()`
+- Full environment sanitization executed *before* privilege changes
+- PAM session kept open for full user session lifetime
+- All inherited file descriptors closed before user execution
+- Password memory securely wiped after authentication
+- No setuid GTK execution path
+- Runtime directory created with correct 0700 permissions
+- Non-interactive PAM flags to prevent hangs
 
 ---
 
