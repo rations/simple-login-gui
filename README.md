@@ -1,125 +1,188 @@
 # simple-login-gui
 
-Minimal GTK3 login manager for Devuan Excalibur + xlibre + seatd. No systemd, no polkit, no ConsoleKit2.
+A minimal GTK3 graphical login manager for Devuan Excalibur using sysvinit and seatd. Replaces the text console login on tty1 with a simple username/password screen. On logout from the window manager, the login screen reappears automatically.
+
+No elogind. No polkit. No ConsoleKit2.
 
 ---
 
-## Prerequisites
-Devuan Excalibur base install (no desktop, boots to tty)
+## Requirements
 
-### 1. Enable contrib/non-free
-```bash
-sudo nano /etc/apt/sources.list
+- Devuan Excalibur (sysvinit)
+- [XLibre](https://x11libre.net/) (recommended) or Xorg — must have libseat support
+- seatd
+- GTK 3
+
+## How it works
+
 ```
-```
-deb http://deb.devuan.org/merged excalibur main contrib non-free non-free-firmware
-deb http://deb.devuan.org/merged excalibur-updates main contrib non-free non-free-firmware
-deb http://deb.devuan.org/merged excalibur-backports main contrib non-free non-free-firmware
-```
-
-### 2. Install xlibre
-```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl
-
-sudo install -m 0755 -d /usr/share/keyrings
-curl -fsSL https://mrchicken.nexussfan.cz/publickey.asc | gpg --dearmor | sudo tee /usr/share/keyrings/NexusSfan.pgp > /dev/null
-sudo chmod a+r /usr/share/keyrings/NexusSfan.pgp
-
-sudo tee /etc/apt/sources.list.d/xlibre-debian.sources << EOF
-Types: deb
-URIs: https://xlibre-debian.github.io/devuan/
-Suites: main
-Components: stable
-Signed-By: /usr/share/keyrings/NexusSfan.pgp
-EOF
-
-sudo apt-get update
-sudo apt-get install xlibre xlibre-archive-keyring
+inittab (tty1)
+    └── xlogin-launcher
+            ├── starts seatd (if not running)
+            ├── starts XLibre/Xorg on :0 with seatd seat management
+            └── execs xlogin (GTK3 login window)
+                    └── on successful login: forks, drops privileges,
+                        execs ~/.xinitrc as the user on display :0
+                        └── on logout: login window reappears
 ```
 
-### 3. Install seatd
-```bash
-sudo apt-get install seatd libseat1
-sudo adduser video
-```
+PAM handles authentication. The session runs entirely as the logged-in user with a clean, minimal environment. The X server stays running between logins.
 
 ---
 
 ## Installation
 
-### Install from Release (Recommended)
+Run as root from the project directory:
 
-```bash
-tar -xf simple-login-gui.tar.gz
-cd simple-login-gui
-sudo ./install.sh
+```sh
+sudo bash install.sh
 ```
 
-### Automated Install (from source)
-```bash
-git clone https://github.com/rations/simple-login-gui.git
-cd simple-login-gui
-sudo ./install.sh
+The installer will:
+
+1. Install runtime dependencies (`libgtk-3-0`, `libpam0g`, `seatd`, `libseat1`, `xinit`, `xterm`, `x11-xserver-utils`)
+2. Build from source (or use prebuilt binaries if present)
+3. Install binaries to `/usr/local/bin/`
+4. Install PAM config to `/etc/pam.d/xlogin`
+5. Install the sysvinit service file to `/etc/init.d/xlogin-launcher`
+6. Enable seatd to start at boot
+7. Ask for the username to configure
+8. Add that user to the `input` and `video` groups
+9. Detect installed window managers and ask which one to use — or offer to install one if none are found
+10. Write `~/.xinitrc` for the target user and `/etc/skel/.xinitrc` for future users
+11. Update `/etc/inittab` to replace the tty1 getty with xlogin-launcher
+
+Reboot (or log out) to activate the graphical login screen.
+
+### Supported window managers
+
+The installer detects and configures any of:
+
+| Window manager | Package   | Session command     |
+|----------------|-----------|---------------------|
+| JWM            | `jwm`     | `jwm`               |
+| Openbox        | `openbox` | `openbox-session`   |
+| XFCE4          | `xfce4`   | `startxfce4`        |
+| MATE           | `mate-desktop-environment` | `mate-session` |
+
+If none are installed, the installer offers to install one via apt.
+
+### XLibre
+
+XLibre is not in the standard Devuan apt repositories. Install it from the XLibre Devuan repository before rebooting:
+
+```sh
+# See https://x11libre.net/ for current repository instructions
 ```
 
-### Manual Install (from source)
-```bash
-# Dependencies
-sudo apt-get install libgtk-3-dev libpam0g-dev build-essential
+The launcher detects XLibre automatically and prefers it over Xorg.
+
+---
+
+## Manual installation
+
+```sh
+# Install build dependencies
+apt-get install -y libgtk-3-dev libpam0g-dev build-essential gcc make
 
 # Build
 make
 
-# Install
+# Install binaries and PAM config
 sudo make install
+
+# Install the init.d service file
+sudo install -m 755 etc_init.d_xlogin-launcher /etc/init.d/xlogin-launcher
+sudo update-rc.d seatd defaults
 ```
 
-### Enable login manager
+Then edit `/etc/inittab` manually: comment out the tty1 getty line and add:
 
-**For sysvinit (Devuan Excalibur):**
-```bash
-sudo nano /etc/inittab
 ```
-Comment out getty on tty1 and add xlogin-launcher:
-```
-#1:2345:respawn:/sbin/getty 38400 tty1
 1:2345:respawn:/usr/local/bin/xlogin-launcher
 ```
 
 ---
 
-## Post Install
-Install your window manager:
-```bash
-sudo apt-get install jwm
-# OR
-sudo apt-get install openbox
+## Session configuration
+
+The login manager looks for a session script in this order:
+
+1. `~/.xinitrc` — user's own session script (preferred)
+2. `/etc/X11/xinit/xinitrc` — system default
+3. Common window managers in order: `jwm`, `openbox-session`, `startxfce4`, `mate-session`
+4. `xterm` — last resort
+
+A minimal `~/.xinitrc`:
+
+```sh
+#!/bin/sh
+exec openbox-session
 ```
 
-Add window manager to `~/.xinitrc` for your user:
-```bash
-echo "exec jwm" > ~/.xinitrc
-chmod +x ~/.xinitrc
+Make it executable:
+
+```sh
+chmod 755 ~/.xinitrc
 ```
 
-## Logout behaviour
-When user logs out from window manager, you will be automatically returned to the login screen.
+To add another user after installation:
+
+```sh
+sudo usermod -aG input,video <username>
+sudo cp /etc/skel/.xinitrc /home/<username>/.xinitrc
+sudo chown <username>:<username> /home/<username>/.xinitrc
+```
 
 ---
 
-## Security
-- Correct privilege dropping order: `setgid()` → `initgroups()` → `setuid()`
-- Full environment sanitization executed *before* privilege changes
-- PAM session properly closed on logout
-- All inherited file descriptors closed before user execution
-- Password memory securely wiped after authentication
-- No setuid GTK execution path
-- Runtime directory created with correct 0700 permissions
-- Non-interactive PAM flags to prevent hangs
-
 ## Uninstall
-```bash
+
+```sh
 sudo make uninstall
-# Restore /etc/inittab
+sudo rm -f /etc/init.d/xlogin-launcher
+sudo update-rc.d xlogin-launcher remove
 ```
+
+Restore `/etc/inittab` manually: uncomment the tty1 getty line and remove the xlogin-launcher line, then run `sudo telinit q`.
+
+---
+
+## Security notes
+
+- Authentication is handled entirely by PAM (`/etc/pam.d/xlogin`)
+- The xlogin binary runs as root (started by inittab), not setuid
+- Privilege drop follows the correct order: `setgid` → `initgroups` → `setuid`
+- The child process environment is fully cleared before privilege drop
+- All inherited file descriptors are closed before exec
+- X access control is disabled (`-ac`) — safe for a single-seat local machine
+- The binary is built with stack protection, FORTIFY_SOURCE, PIE, and full RELRO
+
+---
+
+## Troubleshooting
+
+**Login screen does not appear after reboot**
+- Check that XLibre or Xorg is installed: `command -v Xlibre || command -v Xorg`
+- Check seatd is running: `pgrep seatd`
+- Check `/var/log/syslog` for xlogin-launcher errors
+- Test the launcher manually from a tty as root: `/usr/local/bin/xlogin-launcher`
+
+**Authentication always fails**
+- Verify `/etc/pam.d/xlogin` is installed
+- Test PAM directly: `pamtester xlogin <username> authenticate`
+- Ensure the user's password is set: `passwd <username>`
+
+**Window manager does not start after login**
+- Check `~/.xinitrc` exists and is executable (`chmod 755 ~/.xinitrc`)
+- Test it manually: `DISPLAY=:0 sh ~/.xinitrc`
+
+**Keyboard or mouse not working in the session**
+- Ensure the user is in the `input` group: `groups <username>`
+- Add if missing: `sudo usermod -aG input <username>` then log out and back in
+
+---
+
+## License
+
+GPL-2.0 — see [LICENSE](LICENSE)

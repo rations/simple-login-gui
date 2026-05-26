@@ -4,9 +4,6 @@ xlogin
 *.so
 *.a
 
-# Kilo operational files
-/.kilo/
-
 # Editor backups
 *~
 *.swp

@@ -1,18 +1,18 @@
 #define _GNU_SOURCE
 #include <gtk/gtk.h>
+#include <glib-unix.h>
 #include <security/pam_appl.h>
 #include <pwd.h>
 #include <grp.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <signal.h>
+#include <limits.h>
 
-extern char **environ;
+#define MAX_USERNAME 256
 
 static GtkWidget *username_entry;
 static GtkWidget *password_entry;
@@ -20,13 +20,9 @@ static GtkWidget *status_label;
 static GtkWidget *login_button;
 static pam_handle_t *pamh;
 
-static void update_status(const char *text, gboolean error) {
+static void update_status(const char *text, gboolean is_error) {
     gtk_label_set_text(GTK_LABEL(status_label), text);
-    if (error) {
-        gtk_widget_set_name(status_label, "error-label");
-    } else {
-        gtk_widget_set_name(status_label, "status-label");
-    }
+    gtk_widget_set_name(status_label, is_error ? "error-label" : "status-label");
 }
 
 static void set_ui_sensitive(gboolean sensitive) {
@@ -38,7 +34,7 @@ static void set_ui_sensitive(gboolean sensitive) {
 static int pam_conversation(int num_msg, const struct pam_message **msg,
                             struct pam_response **resp, void *appdata_ptr) {
     (void)appdata_ptr;
-    
+
     *resp = calloc(num_msg, sizeof(struct pam_response));
     if (!*resp) return PAM_BUF_ERR;
 
@@ -51,108 +47,134 @@ static int pam_conversation(int num_msg, const struct pam_message **msg,
                 (*resp)[i].resp = strdup(gtk_entry_get_text(GTK_ENTRY(username_entry)));
                 break;
             case PAM_ERROR_MSG:
-                g_warning("PAM Error: %s", msg[i]->msg);
+                g_warning("PAM error: %s", msg[i]->msg);
                 break;
             case PAM_TEXT_INFO:
-                g_message("PAM Info: %s", msg[i]->msg);
+                g_message("PAM info: %s", msg[i]->msg);
                 break;
             default:
                 for (int j = 0; j < i; j++) free((*resp)[j].resp);
                 free(*resp);
+                *resp = NULL;
                 return PAM_CONV_ERR;
         }
     }
     return PAM_SUCCESS;
 }
 
+static void on_session_exit(GPid pid, gint status, gpointer data) {
+    (void)status;
+    g_spawn_close_pid(pid);
+
+    if (pamh != NULL) {
+        pam_close_session(pamh, 0);
+        pam_end(pamh, PAM_SUCCESS);
+        pamh = NULL;
+    }
+
+    gtk_entry_set_text(GTK_ENTRY(password_entry), "");
+    update_status("", FALSE);
+    set_ui_sensitive(TRUE);
+    gtk_widget_show_all(gtk_widget_get_toplevel(login_button));
+    gtk_widget_grab_focus(username_entry);
+
+    g_free(data);
+}
+
 static gboolean launch_session(gpointer user_data) {
     const char *user = (const char *)user_data;
     struct passwd *pw = getpwnam(user);
-    
+
     if (!pw) {
         update_status("User not found", TRUE);
         set_ui_sensitive(TRUE);
+        g_free(user_data);
         return G_SOURCE_REMOVE;
     }
 
-    // Create XDG_RUNTIME_DIR
+    /* Create /run/user/<uid> with correct ownership */
     char runtime_dir[64];
     snprintf(runtime_dir, sizeof(runtime_dir), "/run/user/%d", pw->pw_uid);
-    
     if (mkdir(runtime_dir, 0700) == -1 && errno != EEXIST) {
-        _exit(1);
+        update_status("Failed to create runtime dir", TRUE);
+        set_ui_sensitive(TRUE);
+        g_free(user_data);
+        return G_SOURCE_REMOVE;
     }
-    if (chown(runtime_dir, pw->pw_uid, pw->pw_gid) == -1) {
-        _exit(1);
-    }
-    if (chmod(runtime_dir, 0700) == -1) {
-        _exit(1);
-    }
+    chown(runtime_dir, pw->pw_uid, pw->pw_gid);
+    chmod(runtime_dir, 0700);
 
     pid_t pid = fork();
+    if (pid < 0) {
+        update_status("Fork failed", TRUE);
+        set_ui_sensitive(TRUE);
+        g_free(user_data);
+        return G_SOURCE_REMOVE;
+    }
+
     if (pid == 0) {
-        // Child process
-        // Reset all signal handlers
-        signal(SIGINT, SIG_DFL);
+        /* ── child: become the user and exec their session ── */
+
+        /* Reset signal handlers to defaults */
+        signal(SIGINT,  SIG_DFL);
         signal(SIGTERM, SIG_DFL);
-        signal(SIGHUP, SIG_DFL);
+        signal(SIGHUP,  SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
 
-        // Close all inherited file descriptors
+        /* Close inherited file descriptors above stderr */
         long maxfd = sysconf(_SC_OPEN_MAX);
-        if (maxfd == -1) maxfd = 1024;
-        for (long fd = 3; fd < maxfd; fd++) {
-            int r;
-            do {
-                r = close(fd);
-            } while (r == -1 && errno == EINTR);
-        }
+        if (maxfd < 0) maxfd = 1024;
+        for (long fd = 3; fd < maxfd; fd++) close((int)fd);
 
-        // Clean environment BEFORE privilege drop
+        /* Sanitise environment before dropping privileges */
         clearenv();
-        
-        // CORRECT ORDER: setgid FIRST, then initgroups, then setuid
+
+        /* Drop privileges — order matters: gid first, then uid */
         if (setgid(pw->pw_gid) != 0) _exit(1);
         if (initgroups(user, pw->pw_gid) != 0) _exit(1);
         if (setuid(pw->pw_uid) != 0) _exit(1);
 
-        setenv("USER", user, 1);
-        setenv("LOGNAME", user, 1);
-        setenv("HOME", pw->pw_dir, 1);
-        setenv("SHELL", pw->pw_shell, 1);
-        setenv("PATH", "/usr/local/bin:/usr/bin:/bin", 1);
-        setenv("DISPLAY", ":0", 1);
-        setenv("XDG_RUNTIME_DIR", runtime_dir, 1);
-        setenv("LIBSEAT_BACKEND", "seatd", 1);
+        /* Build minimal, clean session environment */
+        setenv("USER",            user,          1);
+        setenv("LOGNAME",         user,          1);
+        setenv("HOME",            pw->pw_dir,    1);
+        setenv("SHELL",           pw->pw_shell,  1);
+        setenv("PATH",            "/usr/local/bin:/usr/bin:/bin", 1);
+        setenv("DISPLAY",         ":0",          1);
+        setenv("XDG_RUNTIME_DIR", runtime_dir,   1);
+        setenv("XDG_SEAT",        "seat0",       1);
+        /* No XAUTHORITY — Xorg was started with -ac (no access control) */
+        unsetenv("XAUTHORITY");
 
-        chdir(pw->pw_dir);
+        if (chdir(pw->pw_dir) != 0) chdir("/");
 
-        execve("/usr/bin/startx", (char *const[]) { "startx", NULL }, environ);
-        _exit(127);
-    } else if (pid > 0) {
-        // Parent process
-        update_status("Starting session...", FALSE);
-        gtk_widget_hide(gtk_widget_get_toplevel(login_button));
+        /* Launch session: ~/.xinitrc → system xinitrc → common WMs → xterm */
+        char xinitrc[PATH_MAX];
+        snprintf(xinitrc, sizeof(xinitrc), "%s/.xinitrc", pw->pw_dir);
 
-        int status;
-        waitpid(pid, &status, 0);
-
-         // Session ended, redisplay login
-        update_status("", FALSE);
-        // Session ended, clean up PAM session
-        if (pamh != NULL) {
-            pam_close_session(pamh, 0);
-            pam_end(pamh, PAM_SUCCESS);
-            pamh = NULL;
+        if (access(xinitrc, F_OK) == 0) {
+            execl("/bin/sh", "sh", "--", xinitrc, NULL);
+        } else if (access("/etc/X11/xinit/xinitrc", F_OK) == 0) {
+            execl("/bin/sh", "sh", "--", "/etc/X11/xinit/xinitrc", NULL);
+        } else {
+            /* Last resort: try common WMs, then xterm */
+            static const char *wms[] = {
+                "jwm", "openbox-session", "startxfce4", "mate-session", "xterm", NULL
+            };
+            for (int i = 0; wms[i]; i++) {
+                execlp(wms[i], wms[i], NULL);
+                /* execlp returns only on failure — try the next one */
+            }
         }
-        
-        // Securely wipe password from memory
-        gtk_entry_set_text(GTK_ENTRY(password_entry), "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
-        gtk_entry_set_text(GTK_ENTRY(password_entry), "");
-        gtk_widget_show(gtk_widget_get_toplevel(login_button));
-        set_ui_sensitive(TRUE);
-        gtk_widget_grab_focus(username_entry);
+        _exit(127);
     }
+
+    /* ── parent: hide UI and watch for child exit asynchronously ── */
+    gtk_widget_hide(gtk_widget_get_toplevel(login_button));
+
+    /* g_child_watch_add lets the GTK main loop keep running (processes
+     * the hide event above) while waiting for the session to end. */
+    g_child_watch_add(pid, on_session_exit, user_data);
 
     return G_SOURCE_REMOVE;
 }
@@ -160,12 +182,17 @@ static gboolean launch_session(gpointer user_data) {
 static void on_login_clicked(GtkButton *button, gpointer user_data) {
     (void)button;
     (void)user_data;
-    
+
     const char *user = gtk_entry_get_text(GTK_ENTRY(username_entry));
     const char *pass = gtk_entry_get_text(GTK_ENTRY(password_entry));
 
     if (!*user || !*pass) {
-        update_status("Please enter username and password", TRUE);
+        update_status("Enter username and password", TRUE);
+        return;
+    }
+
+    if (strlen(user) > MAX_USERNAME) {
+        update_status("Username too long", TRUE);
         return;
     }
 
@@ -182,67 +209,63 @@ static void on_login_clicked(GtkButton *button, gpointer user_data) {
         return;
     }
 
-    const int pam_flags = PAM_SILENT | PAM_DISALLOW_NULL_AUTHTOK;
-    
-    ret = pam_authenticate(pamh, pam_flags);
+    const int flags = PAM_SILENT | PAM_DISALLOW_NULL_AUTHTOK;
+
+    ret = pam_authenticate(pamh, flags);
     if (ret != PAM_SUCCESS) goto auth_fail;
 
-    ret = pam_acct_mgmt(pamh, pam_flags);
+    ret = pam_acct_mgmt(pamh, flags);
     if (ret != PAM_SUCCESS) goto auth_fail;
 
-    ret = pam_setcred(pamh, PAM_ESTABLISH_CRED | pam_flags);
+    ret = pam_setcred(pamh, PAM_ESTABLISH_CRED | flags);
     if (ret != PAM_SUCCESS) goto auth_fail;
 
-    ret = pam_open_session(pamh, pam_flags);
-    if (ret != PAM_SUCCESS) goto auth_fail;
+    ret = pam_open_session(pamh, flags);
+    if (ret != PAM_SUCCESS) {
+        /* Credentials were established — must revoke them before ending PAM */
+        pam_setcred(pamh, PAM_DELETE_CRED);
+        goto auth_fail;
+    }
 
-    update_status("Authentication successful", FALSE);
-
-    // Keep PAM session will be closed after session exits in waitpid
-    g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, (GSourceFunc)launch_session, g_strdup(user), g_free);
+    update_status("Starting session...", FALSE);
+    g_idle_add_full(G_PRIORITY_DEFAULT_IDLE,
+                    launch_session,
+                    g_strdup(user),
+                    NULL);
     return;
 
 auth_fail:
     update_status(pam_strerror(pamh, ret), TRUE);
     pam_end(pamh, ret);
+    pamh = NULL;
     set_ui_sensitive(TRUE);
 }
 
 static void on_entry_activate(GtkEntry *entry, gpointer user_data) {
     (void)user_data;
-    
-    if (entry == GTK_ENTRY(username_entry)) {
+    if (entry == GTK_ENTRY(username_entry))
         gtk_widget_grab_focus(password_entry);
-    } else {
+    else
         gtk_button_clicked(GTK_BUTTON(login_button));
-    }
 }
 
-static void handle_sigchld(int sig) {
-    (void)sig;
-    // Reap zombie child processes
-    while (waitpid(-1, NULL, WNOHANG) > 0);
-}
-
-static void sig_handler(int sig) {
-    (void)sig;
+static gboolean on_signal(gpointer data) {
+    (void)data;
     gtk_main_quit();
+    return G_SOURCE_REMOVE;
 }
 
 int main(int argc, char *argv[]) {
-    struct sigaction sa = { .sa_handler = sig_handler };
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGHUP, &sa, NULL);
-
-    struct sigaction sa_chld = {.sa_handler = handle_sigchld, .sa_flags = SA_NOCLDSTOP};
-    sigaction(SIGCHLD, &sa_chld, NULL);
-
     gtk_init(&argc, &argv);
+
+    /* Use GLib's signal integration — async-signal-safe (self-pipe internally) */
+    g_unix_signal_add(SIGTERM, on_signal, NULL);
+    g_unix_signal_add(SIGINT,  on_signal, NULL);
+    g_unix_signal_add(SIGHUP,  on_signal, NULL);
 
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window), "Login");
-    gtk_window_set_default_size(GTK_WINDOW(window), 350, 200);
+    gtk_window_set_default_size(GTK_WINDOW(window), 350, 220);
     gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
     gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
     gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
@@ -253,19 +276,22 @@ int main(int argc, char *argv[]) {
     gtk_container_set_border_width(GTK_CONTAINER(box), 24);
     gtk_container_add(GTK_CONTAINER(window), box);
 
-    GtkWidget *title_label = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(title_label), "<span size=\"x-large\" weight=\"bold\">Login</span>");
-    gtk_box_pack_start(GTK_BOX(box), title_label, FALSE, FALSE, 0);
+    GtkWidget *title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(title),
+                         "<span size=\"x-large\" weight=\"bold\">Login</span>");
+    gtk_box_pack_start(GTK_BOX(box), title, FALSE, FALSE, 0);
 
     username_entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(username_entry), "Username");
-    g_signal_connect(username_entry, "activate", G_CALLBACK(on_entry_activate), NULL);
+    g_signal_connect(username_entry, "activate",
+                     G_CALLBACK(on_entry_activate), NULL);
     gtk_box_pack_start(GTK_BOX(box), username_entry, FALSE, FALSE, 0);
 
     password_entry = gtk_entry_new();
     gtk_entry_set_visibility(GTK_ENTRY(password_entry), FALSE);
     gtk_entry_set_placeholder_text(GTK_ENTRY(password_entry), "Password");
-    g_signal_connect(password_entry, "activate", G_CALLBACK(on_entry_activate), NULL);
+    g_signal_connect(password_entry, "activate",
+                     G_CALLBACK(on_entry_activate), NULL);
     gtk_box_pack_start(GTK_BOX(box), password_entry, FALSE, FALSE, 0);
 
     status_label = gtk_label_new("");
@@ -273,13 +299,13 @@ int main(int argc, char *argv[]) {
     gtk_box_pack_start(GTK_BOX(box), status_label, FALSE, FALSE, 0);
 
     login_button = gtk_button_new_with_label("Login");
-    g_signal_connect(login_button, "clicked", G_CALLBACK(on_login_clicked), NULL);
+    g_signal_connect(login_button, "clicked",
+                     G_CALLBACK(on_login_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(box), login_button, FALSE, FALSE, 0);
 
     gtk_widget_show_all(window);
     gtk_widget_grab_focus(username_entry);
 
     gtk_main();
-
     return 0;
 }

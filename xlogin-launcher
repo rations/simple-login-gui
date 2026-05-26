@@ -1,60 +1,64 @@
 #!/bin/sh
-set -e
 
-# Check if we're in a graphical environment
-if [ -z "$DISPLAY" ]; then
-    # Try to find current VT
-    CURRENT_VT=$(who -r 2>/dev/null | awk '{print $3}' || echo "unknown")
-    if [ "$CURRENT_VT" = "unknown" ]; then
-        echo "No graphical environment or VT found"
+# Kill any stale X server from a previous crashed session
+pkill -x Xlibre 2>/dev/null || true
+pkill -x Xorg   2>/dev/null || true
+sleep 0.5
+
+# Start seatd if not already running
+if ! pgrep -x seatd > /dev/null 2>&1; then
+    /etc/init.d/seatd start
+    sleep 0.5
+    if ! pgrep -x seatd > /dev/null 2>&1; then
+        echo "xlogin-launcher: seatd failed to start" >&2
         exit 1
     fi
 fi
 
-# Check if Xorg is already running
-if pgrep -x Xorg > /dev/null 2>&1; then
-    echo "Xorg already running"
-    exit 0
-fi
-
-# Check if seatd is already running
-if pgrep -x seatd > /dev/null 2>&1; then
-    echo "seatd already running"
-else
-    # Start seatd if not running
-    if [ "$1" = "--no-seatd" ]; then
-        echo "Skipping seatd start"
-    else
-        seatd --user seatd --group seatd &
-        SEATD_PID=$!
-        sleep 0.5
-    fi
-fi
-
-# Set up environment
 export HOME=/root
 export USER=root
 export LOGNAME=root
 export PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 export LIBSEAT_BACKEND=seatd
-
-# Find the correct VT
-if [ -z "$DISPLAY" ]; then
-    export DISPLAY=:0
-fi
-
-# Start Xorg if not running
-if ! pgrep -x Xorg > /dev/null 2>&1; then
-    exec /usr/bin/Xorg :0 vt$(echo $CURRENT_VT | sed 's/tty//') -seat seat0 -keeptty -nolisten tcp &
-    XORG_PID=$!
-
-    # Wait for X to be ready
-    until xset q >/dev/null 2>&1; do
-        sleep 0.2
-    done
-fi
-
 export DISPLAY=:0
 
-# Launch xlogin
+# Detect current VT from the controlling terminal.
+# When started by inittab on tty1 this reliably returns "1".
+VT=$(tty 2>/dev/null | sed 's|/dev/tty||')
+if [ -z "$VT" ] || ! echo "$VT" | grep -qE '^[0-9]+$'; then
+    VT=1
+fi
+
+# Use Xlibre if available, otherwise fall back to Xorg
+if command -v Xlibre > /dev/null 2>&1; then
+    XSERVER=Xlibre
+elif command -v Xorg > /dev/null 2>&1; then
+    XSERVER=Xorg
+else
+    echo "xlogin-launcher: no X server found (Xlibre or Xorg required)" >&2
+    exit 1
+fi
+
+if [ ! -x /usr/local/bin/xlogin ]; then
+    echo "xlogin-launcher: /usr/local/bin/xlogin not found or not executable" >&2
+    exit 1
+fi
+
+# Start the X server.
+# -ac      : disable access control so the user session can connect without
+#            an Xauth cookie (safe for a single-seat local machine).
+# -keeptty : keep controlling terminal for seatd VT management.
+$XSERVER :0 vt$VT -seat seat0 -keeptty -nolisten tcp -ac &
+
+# Wait for the X server to accept connections (up to 30 seconds)
+TRIES=0
+until xset q > /dev/null 2>&1; do
+    sleep 0.3
+    TRIES=$((TRIES + 1))
+    if [ $TRIES -ge 100 ]; then
+        echo "xlogin-launcher: X server did not start within 30 seconds" >&2
+        exit 1
+    fi
+done
+
 exec /usr/local/bin/xlogin
