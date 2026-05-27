@@ -154,6 +154,8 @@ check_wm "jwm"     "jwm"
 check_wm "openbox" "openbox-session"
 check_wm "xfce4"   "startxfce4"
 check_wm "mate"    "mate-session"
+check_wm "lxde"    "startlxde"
+check_wm "lxqt"    "startlxqt"
 
 CHOSEN_CMD=""
 
@@ -193,14 +195,18 @@ else
     echo "  2) openbox"
     echo "  3) xfce4"
     echo "  4) mate"
+    echo "  5) lxde"
+    echo "  6) lxqt"
     echo
     while true; do
-        read -p "Enter number [1-4]: " CHOICE
+        read -p "Enter number [1-6]: " CHOICE
         case "$CHOICE" in
             1) PKG="jwm";                        CHOSEN_CMD="jwm";             break ;;
             2) PKG="openbox";                    CHOSEN_CMD="openbox-session"; break ;;
             3) PKG="xfce4";                      CHOSEN_CMD="startxfce4";      break ;;
             4) PKG="mate-desktop-environment";   CHOSEN_CMD="mate-session";    break ;;
+            5) PKG="lxde";                       CHOSEN_CMD="startlxde";       break ;;
+            6) PKG="lxqt";                       CHOSEN_CMD="startlxqt";       break ;;
             *) echo "  Invalid choice." ;;
         esac
     done

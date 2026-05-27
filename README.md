@@ -1,6 +1,6 @@
 # simple-login-gui
 
-A minimal GTK3 graphical login manager for Devuan Excalibur using sysvinit and seatd. Replaces the text console login on tty1 with a simple username/password screen. On logout from the window manager, the login screen reappears automatically.
+A minimal GTK graphical login manager for Devuan Excalibur using sysvinit and seatd. Replaces the text console login on tty1 with a simple username/password screen. On logout from the window manager, the login screen reappears automatically. Supports GTK2 and GTK3.
 
 No elogind. No polkit. No ConsoleKit2.
 
@@ -11,7 +11,7 @@ No elogind. No polkit. No ConsoleKit2.
 - Devuan Excalibur (sysvinit)
 - [XLibre](https://x11libre.net/) (recommended) or Xorg — must have libseat support
 - seatd
-- GTK 3
+- GTK 2 or GTK 3
 
 ## How it works
 
@@ -20,7 +20,7 @@ inittab (tty1)
     └── xlogin-launcher
             ├── starts seatd (if not running)
             ├── starts XLibre/Xorg on :0 with seatd seat management
-            └── execs xlogin (GTK3 login window)
+            └── execs xlogin (GTK login window)
                     └── on successful login: forks, drops privileges,
                         execs ~/.xinitrc as the user on display :0
                         └── on logout: login window reappears
@@ -38,32 +38,48 @@ Run as root from the project directory:
 sudo bash install.sh
 ```
 
-The installer will:
+The installer will ask:
 
-1. Install runtime dependencies (`libgtk-3-0`, `libpam0g`, `seatd`, `libseat1`, `xinit`, `xterm`, `x11-xserver-utils`)
-2. Build from source (or use prebuilt binaries if present)
-3. Install binaries to `/usr/local/bin/`
-4. Install PAM config to `/etc/pam.d/xlogin`
-5. Install the sysvinit service file to `/etc/init.d/xlogin-launcher`
-6. Enable seatd to start at boot
-7. Ask for the username to configure
-8. Add that user to the `input` and `video` groups
-9. Detect installed window managers and ask which one to use — or offer to install one if none are found
-10. Write `~/.xinitrc` for the target user and `/etc/skel/.xinitrc` for future users
-11. Update `/etc/inittab` to replace the tty1 getty with xlogin-launcher
+1. Which X server you are using (XLibre or Xorg)
+2. Which GTK version to use (GTK3 recommended; GTK2 for minimal systems)
+3. Which username to configure for graphical login
+4. Which window manager to use (detects installed ones, or offers to install one)
 
-Reboot (or log out) to activate the graphical login screen.
+It will then:
+
+- Detect your GPU driver and write `/etc/xlogin.conf` with appropriate X server flags
+- Install runtime dependencies
+- Build from source, or use a prebuilt binary if one matching your GTK version is present
+- Install binaries to `/usr/local/bin/`
+- Install PAM config to `/etc/pam.d/xlogin`
+- Install the sysvinit service file to `/etc/init.d/xlogin-launcher`
+- Enable seatd to start at boot
+- Add the configured user to the `input` and `video` groups
+- Write `~/.xinitrc` for the target user and `/etc/skel/.xinitrc` for future users
+- Update `/etc/inittab` to replace the tty1 getty with xlogin-launcher
+
+Reboot to activate the graphical login screen.
+
+### Prebuilt binaries
+
+If you build both GTK versions ahead of time, the installer will use the matching prebuilt binary without requiring build tools on the target machine:
+
+```sh
+make both        # builds xlogin-gtk3 and xlogin-gtk2
+```
 
 ### Supported window managers
 
 The installer detects and configures any of:
 
-| Window manager | Package   | Session command     |
-|----------------|-----------|---------------------|
-| JWM            | `jwm`     | `jwm`               |
-| Openbox        | `openbox` | `openbox-session`   |
-| XFCE4          | `xfce4`   | `startxfce4`        |
-| MATE           | `mate-desktop-environment` | `mate-session` |
+| Window manager | Package                    | Session command   |
+|----------------|----------------------------|-------------------|
+| JWM            | `jwm`                      | `jwm`             |
+| Openbox        | `openbox`                  | `openbox-session` |
+| XFCE4          | `xfce4`                    | `startxfce4`      |
+| MATE           | `mate-desktop-environment` | `mate-session`    |
+| LXDE           | `lxde`                     | `startlxde`       |
+| LXQt           | `lxqt`                     | `startlxqt`       |
 
 If none are installed, the installer offers to install one via apt.
 
@@ -79,27 +95,72 @@ The launcher detects XLibre automatically and prefers it over Xorg.
 
 ---
 
+## Uninstall
+
+Run as root from the project directory:
+
+```sh
+sudo bash uninstall.sh
+```
+
+This will:
+
+- Remove `/usr/local/bin/xlogin` and `/usr/local/bin/xlogin-launcher`
+- Remove `/etc/pam.d/xlogin` and `/etc/xlogin.conf`
+- Remove and disable `/etc/init.d/xlogin-launcher`
+- Restore `/etc/inittab` (removes the xlogin-launcher line, uncomments the tty1 getty)
+- Reload inittab with `telinit q`
+
+User `~/.xinitrc` files and `/etc/skel/.xinitrc` are not removed. Users remain in the `input` and `video` groups. To remove a user from those groups:
+
+```sh
+gpasswd -d <username> input
+gpasswd -d <username> video
+```
+
+Reboot to return to the text console login.
+
+---
+
 ## Manual installation
 
 ```sh
-# Install build dependencies
+# Install build dependencies (GTK3)
 apt-get install -y libgtk-3-dev libpam0g-dev build-essential gcc make
 
-# Build
+# Or for GTK2
+apt-get install -y libgtk2.0-dev libpam0g-dev build-essential gcc make
+
+# Build (defaults to GTK3)
 make
 
-# Install binaries and PAM config
-sudo make install
+# Or explicitly choose a version
+make GTK_VERSION=3   # produces xlogin-gtk3
+make GTK_VERSION=2   # produces xlogin-gtk2
 
-# Install the init.d service file
+# Install (installs the chosen version as /usr/local/bin/xlogin)
+sudo make install
+sudo make install GTK_VERSION=2
+
+# Install the init.d service file and enable seatd
 sudo install -m 755 etc_init.d_xlogin-launcher /etc/init.d/xlogin-launcher
-sudo update-rc.d seatd defaults
+sudo LC_ALL=C update-rc.d seatd defaults
 ```
 
 Then edit `/etc/inittab` manually: comment out the tty1 getty line and add:
 
 ```
 1:2345:respawn:/usr/local/bin/xlogin-launcher
+```
+
+Write `/etc/xlogin.conf` (use the second form for nvidia):
+
+```sh
+# Open-source GPU (AMD, Intel, modesetting)
+echo 'XSERVER_FLAGS="-seat seat0 -keeptty -nolisten tcp -ac"' > /etc/xlogin.conf
+
+# nvidia proprietary driver
+echo 'XSERVER_FLAGS="-nolisten tcp -ac"' > /etc/xlogin.conf
 ```
 
 ---
@@ -133,18 +194,6 @@ sudo usermod -aG input,video <username>
 sudo cp /etc/skel/.xinitrc /home/<username>/.xinitrc
 sudo chown <username>:<username> /home/<username>/.xinitrc
 ```
-
----
-
-## Uninstall
-
-```sh
-sudo make uninstall
-sudo rm -f /etc/init.d/xlogin-launcher
-sudo update-rc.d xlogin-launcher remove
-```
-
-Restore `/etc/inittab` manually: uncomment the tty1 getty line and remove the xlogin-launcher line, then run `sudo telinit q`.
 
 ---
 

@@ -82,6 +82,16 @@ static void kill_user_processes(uid_t uid) {
     if (p > 0)  waitpid(p, NULL, 0);
 }
 
+/* Clear the X root window to black.
+ * Wallpaper tools (nitrogen, xfdesktop, pcmanfm, etc.) set a property on the
+ * root window that persists after the process exits. Without this, the previous
+ * user's wallpaper remains visible behind the login dialog. */
+static void clear_root_window(void) {
+    pid_t p = fork();
+    if (p == 0) { execlp("xsetroot", "xsetroot", "-solid", "black", NULL); _exit(0); }
+    if (p > 0)  waitpid(p, NULL, 0);
+}
+
 static void on_session_exit(GPid pid, gint status, gpointer data) {
     (void)status;
     g_spawn_close_pid(pid);
@@ -98,6 +108,8 @@ static void on_session_exit(GPid pid, gint status, gpointer data) {
     struct passwd *pw = getpwnam(user);
     if (pw && pw->pw_uid > 0)
         kill_user_processes(pw->pw_uid);
+
+    clear_root_window();
 
     gtk_entry_set_text(GTK_ENTRY(password_entry), "");
     update_status("", FALSE);

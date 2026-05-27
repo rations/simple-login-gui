@@ -1,68 +1,57 @@
 #!/bin/bash
 set -e
 
-echo "Building simple-login-gui release..."
-
-# Clean previous build
-echo "Cleaning previous build..."
-if make clean; then
-    echo "✓ Cleaned successfully"
-else
-    echo "✗ Failed to clean"
+VERSION="$1"
+if [ -z "$VERSION" ]; then
+    echo "Usage: bash make-release.sh <version>" >&2
+    echo "  e.g. bash make-release.sh 1.2.0" >&2
     exit 1
 fi
 
-# Build the project
-echo "Building project..."
-if make; then
-    echo "✓ Build successful"
-else
-    echo "✗ Build failed"
-    exit 1
-fi
+RELEASE_NAME="simple-login-gui-${VERSION}"
+TARBALL="${RELEASE_NAME}.tar.gz"
 
-# Prepare release directory
-echo "Preparing release directory..."
-rm -rf release
-mkdir -p release/simple-login-gui
+echo "=== simple-login-gui release ${VERSION} ==="
+echo
 
-# Copy essential files for installation
-echo "Copying files to release..."
-cp xlogin release/simple-login-gui/
-cp xlogin-launcher release/simple-login-gui/
-cp -r pam.d release/simple-login-gui/
-cp etc_init.d_xlogin-launcher release/simple-login-gui/
-cp install.sh release/simple-login-gui/
-chmod +x release/simple-login-gui/install.sh
-cp Makefile release/simple-login-gui/
-cp README.md release/simple-login-gui/
-cp LICENSE release/simple-login-gui/
-echo "✓ Files copied successfully"
+# Verify prebuilt binaries exist
+for BIN in xlogin-gtk3 xlogin-gtk2; do
+    if [ ! -f "$BIN" ]; then
+        echo "ERROR: $BIN not found. Run 'make both' first." >&2
+        exit 1
+    fi
+done
+
+# Assemble release directory
+echo "Assembling release..."
+rm -rf "$RELEASE_NAME"
+mkdir "$RELEASE_NAME"
+mkdir "$RELEASE_NAME/pam.d"
+mkdir "$RELEASE_NAME/src"
+
+cp xlogin-gtk3              "$RELEASE_NAME/"
+cp xlogin-gtk2              "$RELEASE_NAME/"
+cp xlogin-launcher          "$RELEASE_NAME/"
+cp install.sh               "$RELEASE_NAME/"
+cp uninstall.sh             "$RELEASE_NAME/"
+cp Makefile                 "$RELEASE_NAME/"
+cp src/main.c               "$RELEASE_NAME/src/"
+cp pam.d/xlogin             "$RELEASE_NAME/pam.d/"
+cp etc_init.d_xlogin-launcher "$RELEASE_NAME/"
+cp README.md                "$RELEASE_NAME/"
+cp LICENSE                  "$RELEASE_NAME/"
+
+chmod +x "$RELEASE_NAME/install.sh"
+chmod +x "$RELEASE_NAME/uninstall.sh"
+echo "  done."
+echo
 
 # Create tarball
-echo "Creating tarball..."
-cd release
-if tar -czf ../simple-login-gui.tar.gz simple-login-gui/; then
-    cd ..
-    echo "✓ Tarball created"
-else
-    cd ..
-    echo "✗ Failed to create tarball"
-    exit 1
-fi
+echo "Creating ${TARBALL}..."
+tar -czf "$TARBALL" "$RELEASE_NAME/"
+rm -rf "$RELEASE_NAME"
+echo "  done."
+echo
 
-# Generate checksum
-echo "Generating checksum..."
-if sha256sum simple-login-gui.tar.gz > simple-login-gui.sha256; then
-    echo "✓ Checksum generated"
-else
-    echo "✗ Failed to generate checksum"
-    exit 1
-fi
-
-echo ""
-echo "🎉 Release created successfully!"
-echo "Files:"
-ls -lh simple-login-gui.tar.gz simple-login-gui.sha256
-echo ""
-echo "Upload simple-login-gui.tar.gz to GitHub Releases for automatic installation."
+echo "=== Release ready ==="
+ls -lh "$TARBALL"
