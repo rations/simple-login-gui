@@ -100,7 +100,7 @@ echo
 
 # ── Enable seatd at boot ──────────────────────────────────────────────────────
 echo "Enabling seatd service..."
-update-rc.d seatd defaults
+LC_ALL=C update-rc.d seatd defaults
 echo "  done."
 echo
 
