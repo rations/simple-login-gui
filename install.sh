@@ -9,13 +9,6 @@ fi
 echo "=== simple-login-gui installer ==="
 echo
 
-# ── Runtime dependencies ──────────────────────────────────────────────────────
-echo "Installing runtime dependencies..."
-apt-get update -q
-apt-get install -y libgtk-3-0 libpam0g seatd libseat1 x11-xserver-utils xinit xterm
-echo "  done."
-echo
-
 # ── X server selection ───────────────────────────────────────────────────────
 echo "Which X server are you using?"
 echo "  1) XLibre (recommended for Devuan Excalibur)"
@@ -53,6 +46,22 @@ else
 fi
 echo
 
+# ── GTK version selection ─────────────────────────────────────────────────────
+echo "Which GTK version would you like to use?"
+echo "  1) GTK3 (recommended)"
+echo "  2) GTK2"
+echo
+while true; do
+    read -p "Enter number [1-2]: " GTK_CHOICE
+    case "$GTK_CHOICE" in
+        1) GTK_VERSION=3; GTK_RT_PKG="libgtk-3-0";  GTK_DEV_PKG="libgtk-3-dev";  break ;;
+        2) GTK_VERSION=2; GTK_RT_PKG="libgtk2.0-0"; GTK_DEV_PKG="libgtk2.0-dev"; break ;;
+        *) echo "  Invalid choice." ;;
+    esac
+done
+echo "  Using GTK${GTK_VERSION}."
+echo
+
 # ── GPU detection: configure seatd integration ────────────────────────────────
 echo "Detecting GPU driver..."
 XSERVER_FLAGS="-seat seat0 -keeptty -nolisten tcp -ac"
@@ -78,22 +87,31 @@ EOF
 echo "  Wrote /etc/xlogin.conf"
 echo
 
+# ── Runtime dependencies ──────────────────────────────────────────────────────
+echo "Installing runtime dependencies..."
+apt-get update -q
+apt-get install -y "$GTK_RT_PKG" libpam0g seatd libseat1 x11-xserver-utils xinit xterm
+echo "  done."
+echo
+
 # ── Build or use prebuilt ─────────────────────────────────────────────────────
-if [ -f "xlogin" ] && [ -f "xlogin-launcher" ] && [ -f "pam.d/xlogin" ]; then
-    echo "Using prebuilt binaries."
+PREBUILT="xlogin-gtk${GTK_VERSION}"
+
+if [ -f "$PREBUILT" ] && [ -f "xlogin-launcher" ] && [ -f "pam.d/xlogin" ]; then
+    echo "Using prebuilt GTK${GTK_VERSION} binary ($PREBUILT)."
 else
-    echo "Building from source..."
-    apt-get install -y libgtk-3-dev libpam0g-dev build-essential gcc make
-    make clean && make
+    echo "Building from source (GTK${GTK_VERSION})..."
+    apt-get install -y "$GTK_DEV_PKG" libpam0g-dev build-essential gcc make
+    make GTK_VERSION="$GTK_VERSION"
     echo "  build complete."
 fi
 echo
 
 # ── Install binaries and config ───────────────────────────────────────────────
 echo "Installing binaries and config..."
-install -m 755 xlogin         /usr/local/bin/
+install -m 755 "$PREBUILT"     /usr/local/bin/xlogin
 install -m 755 xlogin-launcher /usr/local/bin/
-install -m 644 pam.d/xlogin   /etc/pam.d/
+install -m 644 pam.d/xlogin    /etc/pam.d/
 install -m 755 etc_init.d_xlogin-launcher /etc/init.d/xlogin-launcher
 echo "  done."
 echo
@@ -132,15 +150,14 @@ check_wm() {
     fi
 }
 
-check_wm "jwm"    "jwm"
+check_wm "jwm"     "jwm"
 check_wm "openbox" "openbox-session"
-check_wm "xfce4"  "startxfce4"
-check_wm "mate"   "mate-session"
+check_wm "xfce4"   "startxfce4"
+check_wm "mate"    "mate-session"
 
 CHOSEN_CMD=""
 
 if [ -n "$WM_LIST" ]; then
-    # Build numbered menu from detected WMs
     echo "  Detected: $WM_LIST"
     echo
     echo "Which window manager would you like to use?"
@@ -160,7 +177,6 @@ if [ -n "$WM_LIST" ]; then
         echo "  Invalid choice, please enter a number between 1 and $COUNT."
     done
 
-    # Extract the chosen command
     i=1
     for cmd in $WM_CMDS; do
         if [ "$i" -eq "$CHOICE" ]; then
@@ -170,7 +186,6 @@ if [ -n "$WM_LIST" ]; then
         i=$((i + 1))
     done
 else
-    # No WM found — offer to install one
     echo "  No supported window manager detected."
     echo
     echo "Which would you like to install?"
@@ -182,10 +197,10 @@ else
     while true; do
         read -p "Enter number [1-4]: " CHOICE
         case "$CHOICE" in
-            1) PKG="jwm";          CHOSEN_CMD="jwm";          break ;;
-            2) PKG="openbox";      CHOSEN_CMD="openbox-session"; break ;;
-            3) PKG="xfce4";        CHOSEN_CMD="startxfce4";   break ;;
-            4) PKG="mate-desktop-environment"; CHOSEN_CMD="mate-session"; break ;;
+            1) PKG="jwm";                        CHOSEN_CMD="jwm";             break ;;
+            2) PKG="openbox";                    CHOSEN_CMD="openbox-session"; break ;;
+            3) PKG="xfce4";                      CHOSEN_CMD="startxfce4";      break ;;
+            4) PKG="mate-desktop-environment";   CHOSEN_CMD="mate-session";    break ;;
             *) echo "  Invalid choice." ;;
         esac
     done

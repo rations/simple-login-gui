@@ -299,7 +299,11 @@ int main(int argc, char *argv[]) {
 
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
+#if GTK_MAJOR_VERSION >= 3
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+#else
+    GtkWidget *box = gtk_vbox_new(FALSE, 12);
+#endif
     gtk_container_set_border_width(GTK_CONTAINER(box), 24);
     gtk_container_add(GTK_CONTAINER(window), box);
 
@@ -309,14 +313,18 @@ int main(int argc, char *argv[]) {
     gtk_box_pack_start(GTK_BOX(box), title, FALSE, FALSE, 0);
 
     username_entry = gtk_entry_new();
+#if GTK_MAJOR_VERSION >= 3
     gtk_entry_set_placeholder_text(GTK_ENTRY(username_entry), "Username");
+#endif
     g_signal_connect(username_entry, "activate",
                      G_CALLBACK(on_entry_activate), NULL);
     gtk_box_pack_start(GTK_BOX(box), username_entry, FALSE, FALSE, 0);
 
     password_entry = gtk_entry_new();
     gtk_entry_set_visibility(GTK_ENTRY(password_entry), FALSE);
+#if GTK_MAJOR_VERSION >= 3
     gtk_entry_set_placeholder_text(GTK_ENTRY(password_entry), "Password");
+#endif
     g_signal_connect(password_entry, "activate",
                      G_CALLBACK(on_entry_activate), NULL);
     gtk_box_pack_start(GTK_BOX(box), password_entry, FALSE, FALSE, 0);
