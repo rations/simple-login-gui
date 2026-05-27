@@ -101,7 +101,7 @@ static gboolean launch_session(gpointer user_data) {
         g_free(user_data);
         return G_SOURCE_REMOVE;
     }
-    chown(runtime_dir, pw->pw_uid, pw->pw_gid);
+    if (chown(runtime_dir, pw->pw_uid, pw->pw_gid) != 0) { /* non-fatal */ }
     chmod(runtime_dir, 0700);
 
     pid_t pid = fork();
@@ -146,7 +146,7 @@ static gboolean launch_session(gpointer user_data) {
         /* No XAUTHORITY — Xorg was started with -ac (no access control) */
         unsetenv("XAUTHORITY");
 
-        if (chdir(pw->pw_dir) != 0) chdir("/");
+        if (chdir(pw->pw_dir) != 0) { if (chdir("/") != 0) { /* nowhere to go */ } }
 
         /* Launch session: ~/.xinitrc → system xinitrc → common WMs → xterm */
         char xinitrc[PATH_MAX];

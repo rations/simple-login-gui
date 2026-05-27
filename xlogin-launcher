@@ -1,17 +1,24 @@
 #!/bin/sh
 
+fatal() {
+    logger -t xlogin-launcher "FATAL: $1 -- falling back to text console"
+    echo "xlogin-launcher: $1" >&2
+    exec /sbin/getty --noclear 38400 tty1
+}
+
 # Kill any stale X server from a previous crashed session
 pkill -x Xlibre 2>/dev/null || true
 pkill -x Xorg   2>/dev/null || true
 sleep 0.5
 
-# Start seatd if not already running
+# Start seatd if not already running.
+# X server may use seatd for device access (open-source GPU drivers).
+# seatd is also available for Wayland compositors in the user session.
 if ! pgrep -x seatd > /dev/null 2>&1; then
     /etc/init.d/seatd start
     sleep 0.5
     if ! pgrep -x seatd > /dev/null 2>&1; then
-        echo "xlogin-launcher: seatd failed to start" >&2
-        exit 1
+        logger -t xlogin-launcher "WARNING: seatd failed to start (non-fatal)"
     fi
 fi
 
@@ -21,6 +28,15 @@ export LOGNAME=root
 export PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 export LIBSEAT_BACKEND=seatd
 export DISPLAY=:0
+
+# Site configuration written by install.sh.
+# XSERVER_FLAGS controls whether seatd integration is active:
+#   open-source GPU:   -seat seat0 -keeptty -nolisten tcp -ac
+#   nvidia proprietary: -nolisten tcp -ac  (libseat disabled; nvidia DDX does not support it)
+XSERVER_FLAGS="-seat seat0 -keeptty -nolisten tcp -ac"
+if [ -f /etc/xlogin.conf ]; then
+    . /etc/xlogin.conf
+fi
 
 # Detect current VT from the controlling terminal.
 # When started by inittab on tty1 this reliably returns "1".
@@ -35,20 +51,17 @@ if command -v Xlibre > /dev/null 2>&1; then
 elif command -v Xorg > /dev/null 2>&1; then
     XSERVER=Xorg
 else
-    echo "xlogin-launcher: no X server found (Xlibre or Xorg required)" >&2
-    exit 1
+    fatal "no X server found (Xlibre or Xorg required)"
 fi
 
 if [ ! -x /usr/local/bin/xlogin ]; then
-    echo "xlogin-launcher: /usr/local/bin/xlogin not found or not executable" >&2
-    exit 1
+    fatal "/usr/local/bin/xlogin not found or not executable"
 fi
 
-# Start the X server.
-# -ac      : disable access control so the user session can connect without
-#            an Xauth cookie (safe for a single-seat local machine).
-# -keeptty : keep controlling terminal for seatd VT management.
-$XSERVER :0 vt$VT -seat seat0 -keeptty -nolisten tcp -ac &
+# Start the X server. XSERVER_FLAGS is intentionally unquoted so the shell
+# splits it into individual arguments.
+# shellcheck disable=SC2086
+$XSERVER :0 vt$VT $XSERVER_FLAGS &
 
 # Wait for the X server to accept connections (up to 30 seconds)
 TRIES=0
@@ -56,9 +69,10 @@ until xset q > /dev/null 2>&1; do
     sleep 0.3
     TRIES=$((TRIES + 1))
     if [ $TRIES -ge 100 ]; then
-        echo "xlogin-launcher: X server did not start within 30 seconds" >&2
-        exit 1
+        pkill -x "$XSERVER" 2>/dev/null || true
+        fatal "X server did not start within 30 seconds"
     fi
 done
 
 exec /usr/local/bin/xlogin
+fatal "exec xlogin failed"

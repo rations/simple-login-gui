@@ -151,12 +151,20 @@ Restore `/etc/inittab` manually: uncomment the tty1 getty line and remove the xl
 ## Security notes
 
 - Authentication is handled entirely by PAM (`/etc/pam.d/xlogin`)
-- The xlogin binary runs as root (started by inittab), not setuid
+- The xlogin binary runs as root (started by inittab), not setuid — PAM requires root to read `/etc/shadow`, and X must be started before a user is known. This is the same model as traditional display managers (xdm, slim, ldm). The attack surface is physical-only: X is started with `-nolisten tcp` and the machine must be locally accessible
 - Privilege drop follows the correct order: `setgid` → `initgroups` → `setuid`
 - The child process environment is fully cleared before privilege drop
 - All inherited file descriptors are closed before exec
 - X access control is disabled (`-ac`) — safe for a single-seat local machine
 - The binary is built with stack protection, FORTIFY_SOURCE, PIE, and full RELRO
+
+### nvidia proprietary driver
+
+The nvidia proprietary DDX driver does not support libseat device management. The installer
+detects this automatically and writes `/etc/xlogin.conf` with seatd integration disabled
+(`-seat seat0 -keeptty` omitted). seatd continues to run and is available for Wayland
+compositors started from the user session. Open-source GPU drivers (AMD, Intel, modesetting)
+use full seatd integration.
 
 ---
 

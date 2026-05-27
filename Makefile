@@ -27,3 +27,4 @@ uninstall:
 	rm -f /usr/local/bin/$(TARGET)
 	rm -f /usr/local/bin/xlogin-launcher
 	rm -f /etc/pam.d/xlogin
+	rm -f /etc/xlogin.conf
