@@ -6,6 +6,7 @@
 #include <grp.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,15 +63,41 @@ static int pam_conversation(int num_msg, const struct pam_message **msg,
     return PAM_SUCCESS;
 }
 
+/* Kill all processes owned by uid: SIGTERM, brief wait, then SIGKILL.
+ * This purges orphaned X clients left after the session script exits,
+ * restoring a clean display before the login window reappears. */
+static void kill_user_processes(uid_t uid) {
+    char uid_s[32];
+    snprintf(uid_s, sizeof(uid_s), "%u", (unsigned)uid);
+    pid_t p;
+
+    p = fork();
+    if (p == 0) { execlp("pkill", "pkill", "-TERM", "-u", uid_s, NULL); _exit(0); }
+    if (p > 0)  waitpid(p, NULL, 0);
+
+    usleep(500000); /* 0.5 s for processes to honour SIGTERM */
+
+    p = fork();
+    if (p == 0) { execlp("pkill", "pkill", "-KILL", "-u", uid_s, NULL); _exit(0); }
+    if (p > 0)  waitpid(p, NULL, 0);
+}
+
 static void on_session_exit(GPid pid, gint status, gpointer data) {
     (void)status;
     g_spawn_close_pid(pid);
+
+    const char *user = (const char *)data;
 
     if (pamh != NULL) {
         pam_close_session(pamh, 0);
         pam_end(pamh, PAM_SUCCESS);
         pamh = NULL;
     }
+
+    /* Purge any X clients or other processes the session left behind */
+    struct passwd *pw = getpwnam(user);
+    if (pw && pw->pw_uid > 0)
+        kill_user_processes(pw->pw_uid);
 
     gtk_entry_set_text(GTK_ENTRY(password_entry), "");
     update_status("", FALSE);

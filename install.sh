@@ -245,7 +245,9 @@ echo
 echo "=== Installation complete ==="
 echo
 echo "Notes:"
-echo "  - Log out or reboot to activate the graphical login screen."
+echo "  - Reboot to activate the graphical login screen."
+echo "    Logging out of a graphical session returns you to the current display"
+echo "    manager, not xlogin. A full reboot is required."
 echo "  - Users can customise their session by editing ~/.xinitrc"
 echo "  - To add another user, re-run this script or manually:"
 echo "      usermod -aG input,video <username>"
