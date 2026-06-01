@@ -131,6 +131,14 @@ static gboolean launch_session(gpointer user_data) {
         return G_SOURCE_REMOVE;
     }
 
+    /* Ensure /run/user exists — not created by sysvinit on seatd-only systems */
+    if (mkdir("/run/user", 0755) == -1 && errno != EEXIST) {
+        update_status("Failed to create /run/user", TRUE);
+        set_ui_sensitive(TRUE);
+        g_free(user_data);
+        return G_SOURCE_REMOVE;
+    }
+
     /* Create /run/user/<uid> with correct ownership */
     char runtime_dir[64];
     snprintf(runtime_dir, sizeof(runtime_dir), "/run/user/%d", pw->pw_uid);

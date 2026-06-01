@@ -22,6 +22,10 @@ if ! pgrep -x seatd > /dev/null 2>&1; then
     fi
 fi
 
+# Ensure /run/user exists — not created by sysvinit on seatd-only systems
+mkdir -p /run/user
+chmod 755 /run/user
+
 export HOME=/root
 export USER=root
 export LOGNAME=root
