@@ -35,7 +35,7 @@ PAM handles authentication. The session runs entirely as the logged-in user with
 Download the release tarball, extract it, and run the installer:
 
 ```sh
-tar -xf simple-login-gui-1.0.0.tar.gz
+tar -xf simple-login-gui-1.0.1.tar.gz
 cd simple-login-gui-1.0.0
 sudo bash install.sh
 ```
