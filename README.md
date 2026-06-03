@@ -45,7 +45,8 @@ The installer will ask:
 1. Which X server you are using (XLibre or Xorg)
 2. Which GTK version to use (GTK3 recommended; GTK2 for minimal systems)
 3. Which username to configure for graphical login
-4. Which window manager to use (detects installed ones, or offers to install one)
+4. Which session to use (reads `/usr/share/xsessions/` — any installed WM or DE appears here)
+5. Whether to start the session inside a D-Bus session bus (recommended — enables trash, removable media, and other GVfs-backed features in file managers such as pcmanfm)
 
 It will then:
 
@@ -62,6 +63,16 @@ It will then:
 
 Reboot to activate the graphical login screen.
 
+### Session detection
+
+The installer reads `/usr/share/xsessions/*.desktop` to find available sessions. Any properly packaged window manager or desktop environment installs a file there, so the installer works with whatever is on the system — JWM, Openbox, XFCE4, MATE, LXDE, LXQt, i3, and anything else.
+
+Install your preferred WM or DE before running the installer. If no sessions are found, the installer will ask you to enter a session command manually.
+
+### D-Bus session
+
+When prompted, choosing yes wraps the session in `dbus-run-session`, which starts a D-Bus session bus and tears it down cleanly on logout. This is needed for trash, removable media handling, and other GVfs-backed features in file managers such as pcmanfm. Choosing no launches the session directly with no D-Bus bus — suitable for minimal setups that do not need these features.
+
 ### Prebuilt binaries
 
 If you build both GTK versions ahead of time, the installer will use the matching prebuilt binary without requiring build tools on the target machine:
@@ -69,21 +80,6 @@ If you build both GTK versions ahead of time, the installer will use the matchin
 ```sh
 make both        # builds xlogin-gtk3 and xlogin-gtk2
 ```
-
-### Supported window managers
-
-The installer detects and configures any of:
-
-| Window manager | Package                    | Session command   |
-|----------------|----------------------------|-------------------|
-| JWM            | `jwm`                      | `jwm`             |
-| Openbox        | `openbox`                  | `openbox-session` |
-| XFCE4          | `xfce4`                    | `startxfce4`      |
-| MATE           | `mate-desktop-environment` | `mate-session`    |
-| LXDE           | `lxde`                     | `startlxde`       |
-| LXQt           | `lxqt`                     | `startlxqt`       |
-
-If none are installed, the installer offers to install one via apt.
 
 ### XLibre
 

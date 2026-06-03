@@ -135,87 +135,76 @@ usermod -aG input,video "$TARGET_USER"
 echo "  done."
 echo
 
-# ── Detect installed window managers ─────────────────────────────────────────
-echo "Detecting installed window managers..."
+# ── Detect installed sessions ─────────────────────────────────────────────────
+echo "Detecting installed sessions..."
 
-WM_LIST=""
-WM_CMDS=""
+SESSION_NAMES=()
+SESSION_EXECS=()
 
-check_wm() {
-    local name="$1"
-    local cmd="$2"
-    if command -v "$cmd" > /dev/null 2>&1; then
-        WM_LIST="${WM_LIST}${name} "
-        WM_CMDS="${WM_CMDS}${cmd} "
-    fi
-}
-
-check_wm "jwm"     "jwm"
-check_wm "openbox" "openbox-session"
-check_wm "xfce4"   "startxfce4"
-check_wm "mate"    "mate-session"
-check_wm "lxde"    "startlxde"
-check_wm "lxqt"    "startlxqt"
+if [ -d /usr/share/xsessions ]; then
+    for desktop in /usr/share/xsessions/*.desktop; do
+        [ -f "$desktop" ] || continue
+        NAME=$(grep '^Name=' "$desktop" | head -1 | cut -d= -f2-)
+        EXEC=$(grep '^Exec=' "$desktop" | head -1 | cut -d= -f2-)
+        [ -z "$NAME" ] && continue
+        [ -z "$EXEC" ] && continue
+        SESSION_NAMES+=("$NAME")
+        SESSION_EXECS+=("$EXEC")
+    done
+fi
 
 CHOSEN_CMD=""
 
-if [ -n "$WM_LIST" ]; then
-    echo "  Detected: $WM_LIST"
-    echo
-    echo "Which window manager would you like to use?"
-    i=1
-    for name in $WM_LIST; do
-        echo "  $i) $name"
-        i=$((i + 1))
+if [ ${#SESSION_NAMES[@]} -gt 0 ]; then
+    echo "  Found:"
+    for i in "${!SESSION_NAMES[@]}"; do
+        echo "  $((i+1))) ${SESSION_NAMES[$i]}"
     done
     echo
-    COUNT=$((i - 1))
     while true; do
-        read -p "Enter number [1-$COUNT]: " CHOICE
-        if echo "$CHOICE" | grep -qE "^[0-9]+$" && \
-           [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le "$COUNT" ]; then
+        read -p "Enter number [1-${#SESSION_NAMES[@]}]: " CHOICE
+        if [[ "$CHOICE" =~ ^[0-9]+$ ]] && \
+           [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le "${#SESSION_NAMES[@]}" ]; then
+            CHOSEN_CMD="${SESSION_EXECS[$((CHOICE-1))]}"
             break
         fi
-        echo "  Invalid choice, please enter a number between 1 and $COUNT."
-    done
-
-    i=1
-    for cmd in $WM_CMDS; do
-        if [ "$i" -eq "$CHOICE" ]; then
-            CHOSEN_CMD="$cmd"
-            break
-        fi
-        i=$((i + 1))
+        echo "  Invalid choice."
     done
 else
-    echo "  No supported window manager detected."
-    echo
-    echo "Which would you like to install?"
-    echo "  1) jwm"
-    echo "  2) openbox"
-    echo "  3) xfce4"
-    echo "  4) mate"
-    echo "  5) lxde"
-    echo "  6) lxqt"
-    echo
-    while true; do
-        read -p "Enter number [1-6]: " CHOICE
-        case "$CHOICE" in
-            1) PKG="jwm";                        CHOSEN_CMD="jwm";             break ;;
-            2) PKG="openbox";                    CHOSEN_CMD="openbox-session"; break ;;
-            3) PKG="xfce4";                      CHOSEN_CMD="startxfce4";      break ;;
-            4) PKG="mate-desktop-environment";   CHOSEN_CMD="mate-session";    break ;;
-            5) PKG="lxde";                       CHOSEN_CMD="startlxde";       break ;;
-            6) PKG="lxqt";                       CHOSEN_CMD="startlxqt";       break ;;
-            *) echo "  Invalid choice." ;;
-        esac
-    done
-    echo "Installing $PKG..."
-    apt-get install -y "$PKG"
-    echo "  done."
+    echo "  No sessions found in /usr/share/xsessions/."
+    echo "  Install a window manager or desktop environment first, then re-run,"
+    echo "  or enter a session command manually (leave blank to abort):"
+    read -p "  Session command: " CHOSEN_CMD
+    if [ -z "$CHOSEN_CMD" ]; then
+        echo "ERROR: no session command provided." >&2
+        exit 1
+    fi
 fi
 
 echo "Using session command: $CHOSEN_CMD"
+echo
+
+# ── D-Bus session ─────────────────────────────────────────────────────────────
+echo "Start the session inside a D-Bus session bus?"
+echo "  Enables trash, removable media, and other GVfs-backed features"
+echo "  in file managers such as pcmanfm. Uses dbus-run-session."
+echo
+read -p "Add dbus-run-session to ~/.xinitrc? [Y/n]: " DBUS_CHOICE
+case "$DBUS_CHOICE" in
+    [nN]*) USE_DBUS=no ;;
+    *)     USE_DBUS=yes ;;
+esac
+
+if [ "$USE_DBUS" = "yes" ]; then
+    if ! command -v dbus-run-session > /dev/null 2>&1; then
+        echo "  Installing dbus..."
+        apt-get install -y dbus
+    fi
+    SESSION_EXEC="dbus-run-session $CHOSEN_CMD"
+else
+    SESSION_EXEC="$CHOSEN_CMD"
+fi
+echo "  Session command: $SESSION_EXEC"
 echo
 
 # ── Write ~/.xinitrc ──────────────────────────────────────────────────────────
@@ -234,7 +223,7 @@ fi
 if [ "$WRITE_XINITRC" = "yes" ]; then
     cat > "$XINITRC" <<EOF
 #!/bin/sh
-exec $CHOSEN_CMD
+exec $SESSION_EXEC
 EOF
     chown "$TARGET_USER:$TARGET_USER" "$XINITRC"
     chmod 755 "$XINITRC"
@@ -244,7 +233,7 @@ fi
 # Also install to /etc/skel so new users get a working .xinitrc
 cat > /etc/skel/.xinitrc <<EOF
 #!/bin/sh
-exec $CHOSEN_CMD
+exec $SESSION_EXEC
 EOF
 chmod 755 /etc/skel/.xinitrc
 echo "  Wrote /etc/skel/.xinitrc"
