@@ -113,6 +113,8 @@ install -m 755 "$PREBUILT"     /usr/local/bin/xlogin
 install -m 755 xlogin-launcher /usr/local/bin/
 install -m 644 pam.d/xlogin    /etc/pam.d/
 install -m 755 etc_init.d_xlogin-launcher /etc/init.d/xlogin-launcher
+mkdir -p /etc/polkit-1/rules.d
+install -m 644 polkit/10-local.rules /etc/polkit-1/rules.d/
 echo "  done."
 echo
 
@@ -130,8 +132,8 @@ if ! id "$TARGET_USER" > /dev/null 2>&1; then
 fi
 USER_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 
-echo "Adding $TARGET_USER to input and video groups..."
-usermod -aG input,video "$TARGET_USER"
+echo "Adding $TARGET_USER to input, video, and plugdev groups..."
+usermod -aG input,video,plugdev "$TARGET_USER"
 echo "  done."
 echo
 

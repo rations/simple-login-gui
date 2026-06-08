@@ -2,7 +2,7 @@
 
 A minimal GTK graphical login manager for Devuan Excalibur using sysvinit and seatd. Replaces the text console login on tty1 with a simple username/password screen. On logout from the window manager, the login screen reappears automatically. Supports GTK2 and GTK3.
 
-No elogind. No polkit. No ConsoleKit2.
+Works with seatd only. elogind is optional. No ConsoleKit2 required.
 
 ---
 
@@ -57,7 +57,8 @@ It will then:
 - Install PAM config to `/etc/pam.d/xlogin`
 - Install the sysvinit service file to `/etc/init.d/xlogin-launcher`
 - Enable seatd to start at boot
-- Add the configured user to the `input` and `video` groups
+- Install polkit rules to `/etc/polkit-1/rules.d/` for passwordless mounting of removable media and shutdown
+- Add the configured user to the `input`, `video`, and `plugdev` groups
 - Write `~/.xinitrc` for the target user and `/etc/skel/.xinitrc` for future users
 - Update `/etc/inittab` to replace the tty1 getty with xlogin-launcher
 
@@ -72,6 +73,17 @@ Install your preferred WM or DE before running the installer. If no sessions are
 ### D-Bus session
 
 When prompted, choosing yes wraps the session in `dbus-run-session`, which starts a D-Bus session bus and tears it down cleanly on logout. This is needed for trash, removable media handling, and other GVfs-backed features in file managers such as pcmanfm. Choosing no launches the session directly with no D-Bus bus — suitable for minimal setups that do not need these features.
+
+### Removable media and shutdown
+
+The installer places polkit rules in `/etc/polkit-1/rules.d/10-local.rules` that grant:
+
+- Members of the `plugdev` group — passwordless mounting, unmounting, and ejecting of removable media via udisks2
+- Members of the `sudo` group — passwordless shutdown and reboot
+
+These rules work on both seatd-only systems (where no session manager is present to confirm the session is active at the seat) and elogind systems. If polkit is not installed the rules file is ignored.
+
+When elogind is installed, simple-login-gui also passes full seat and VT information to `pam_elogind.so` when opening the session, so elogind correctly registers the session as active at the seat.
 
 ### Prebuilt binaries
 
@@ -109,11 +121,12 @@ This will:
 - Restore `/etc/inittab` (removes the xlogin-launcher line, uncomments the tty1 getty)
 - Reload inittab with `telinit q`
 
-User `~/.xinitrc` files and `/etc/skel/.xinitrc` are not removed. Users remain in the `input` and `video` groups. To remove a user from those groups:
+User `~/.xinitrc` files and `/etc/skel/.xinitrc` are not removed. Users remain in the `input`, `video`, and `plugdev` groups. To remove a user from those groups:
 
 ```sh
 gpasswd -d <username> input
 gpasswd -d <username> video
+gpasswd -d <username> plugdev
 ```
 
 Reboot to return to the text console login.
@@ -143,6 +156,10 @@ sudo make install GTK_VERSION=2
 # Install the init.d service file and enable seatd
 sudo install -m 755 etc_init.d_xlogin-launcher /etc/init.d/xlogin-launcher
 sudo LC_ALL=C update-rc.d seatd defaults
+
+# Install polkit rules
+sudo mkdir -p /etc/polkit-1/rules.d
+sudo install -m 644 polkit/10-local.rules /etc/polkit-1/rules.d/
 ```
 
 Then edit `/etc/inittab` manually: comment out the tty1 getty line and add:
@@ -188,7 +205,7 @@ chmod 755 ~/.xinitrc
 To add another user after installation:
 
 ```sh
-sudo usermod -aG input,video <username>
+sudo usermod -aG input,video,plugdev <username>
 sudo cp /etc/skel/.xinitrc /home/<username>/.xinitrc
 sudo chown <username>:<username> /home/<username>/.xinitrc
 ```

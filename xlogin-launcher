@@ -49,6 +49,15 @@ if [ -z "$VT" ] || ! echo "$VT" | grep -qE '^[0-9]+$'; then
     VT=1
 fi
 
+# Export seat/VT info so pam_elogind can register the session as active at the
+# seat. Without XDG_VTNR elogind registers the session but does not mark it
+# active, causing polkit to demand the root password for operations like
+# mounting removable media and shutdown.
+export XDG_VTNR=$VT
+export XDG_SEAT=seat0
+export XDG_SESSION_TYPE=x11
+export XDG_SESSION_CLASS=user
+
 # Use Xlibre if available, otherwise fall back to Xorg
 if command -v Xlibre > /dev/null 2>&1; then
     XSERVER=Xlibre

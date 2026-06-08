@@ -1,0 +1,29 @@
+// Local polkit rules for simple-login-gui
+//
+// Grants plugdev members passwordless mount/unmount of removable media and
+// grants sudo members passwordless shutdown and reboot. This covers both
+// seatd-only systems (where no session manager registers the session as active)
+// and provides a fallback for elogind systems.
+
+polkit.addRule(function(action, subject) {
+    var mountActions = [
+        "org.freedesktop.udisks2.filesystem-mount",
+        "org.freedesktop.udisks2.filesystem-mount-other-seat",
+        "org.freedesktop.udisks2.filesystem-unmount-others",
+        "org.freedesktop.udisks2.eject-media",
+        "org.freedesktop.udisks2.power-off-drive"
+    ];
+    var powerActions = [
+        "org.freedesktop.login1.power-off",
+        "org.freedesktop.login1.reboot",
+        "org.freedesktop.consolekit.system.stop",
+        "org.freedesktop.consolekit.system.restart"
+    ];
+
+    if (mountActions.indexOf(action.id) >= 0 && subject.isInGroup("plugdev")) {
+        return polkit.Result.YES;
+    }
+    if (powerActions.indexOf(action.id) >= 0 && subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});

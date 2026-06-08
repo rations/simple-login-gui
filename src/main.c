@@ -267,6 +267,21 @@ static void on_login_clicked(GtkButton *button, gpointer user_data) {
     ret = pam_setcred(pamh, PAM_ESTABLISH_CRED | flags);
     if (ret != PAM_SUCCESS) goto auth_fail;
 
+    /* Give pam_elogind the seat/VT context it needs to register the session as
+     * active. Without XDG_VTNR the session is registered but not marked active
+     * at the seat, so polkit demands root for mount/shutdown operations. */
+    pam_putenv(pamh, "XDG_SEAT=seat0");
+    pam_putenv(pamh, "XDG_SESSION_TYPE=x11");
+    pam_putenv(pamh, "XDG_SESSION_CLASS=user");
+    {
+        const char *vtnr = getenv("XDG_VTNR");
+        if (vtnr) {
+            char vtnr_buf[32];
+            snprintf(vtnr_buf, sizeof(vtnr_buf), "XDG_VTNR=%s", vtnr);
+            pam_putenv(pamh, vtnr_buf);
+        }
+    }
+
     ret = pam_open_session(pamh, flags);
     if (ret != PAM_SUCCESS) {
         /* Credentials were established — must revoke them before ending PAM */

@@ -15,6 +15,7 @@ rm -f /usr/local/bin/xlogin
 rm -f /usr/local/bin/xlogin-launcher
 rm -f /etc/pam.d/xlogin
 rm -f /etc/xlogin.conf
+rm -f /etc/polkit-1/rules.d/10-local.rules
 echo "  done."
 echo
 
@@ -48,5 +49,7 @@ echo "Notes:"
 echo "  - Reboot to return to the text console login."
 echo "  - User ~/.xinitrc files were not removed."
 echo "  - /etc/skel/.xinitrc was not removed."
-echo "  - Users remain in the input and video groups."
-echo "    To remove: gpasswd -d <username> input && gpasswd -d <username> video"
+echo "  - Users remain in the input, video, and plugdev groups."
+echo "    To remove: gpasswd -d <username> input"
+echo "               gpasswd -d <username> video"
+echo "               gpasswd -d <username> plugdev"
