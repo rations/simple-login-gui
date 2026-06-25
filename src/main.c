@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
@@ -30,6 +31,62 @@ static void set_ui_sensitive(gboolean sensitive) {
     gtk_widget_set_sensitive(username_entry, sensitive);
     gtk_widget_set_sensitive(password_entry, sensitive);
     gtk_widget_set_sensitive(login_button, sensitive);
+}
+
+/* Load the system locale into the (already-cleared) child environment.
+ *
+ * We clearenv() and rebuild a minimal session environment, so unless we set
+ * LANG/LC_* here the session inherits no locale and glibc falls back to C/POSIX,
+ * whose encoding is ASCII — every UTF-8 character (em-dashes, box-drawing,
+ * accented letters) then renders as garbage in terminals and TUIs. A normal
+ * getty/login gets these from PAM's pam_env via /etc/default/locale; we read that
+ * file (then /etc/environment) ourselves. Falls back to C.UTF-8 so the session is
+ * at least UTF-8 capable even when no system locale is configured. */
+static void load_locale_env(void) {
+    static const char *const keys[] = {
+        "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_TIME",
+        "LC_COLLATE", "LC_MONETARY", "LC_MESSAGES", "LC_PAPER", "LC_NAME",
+        "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION", NULL
+    };
+    static const char *const files[] = {
+        "/etc/default/locale", "/etc/environment", NULL
+    };
+
+    for (int f = 0; files[f]; f++) {
+        FILE *fp = fopen(files[f], "re");
+        if (!fp) continue;
+        char line[512];
+        while (fgets(line, sizeof(line), fp)) {
+            char *p = line;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '#' || *p == '\n' || *p == '\0') continue;
+            if (strncmp(p, "export ", 7) == 0) p += 7;   /* tolerate "export FOO=" */
+
+            char *eq = strchr(p, '=');
+            if (!eq) continue;
+            *eq = '\0';
+            char *key = p, *val = eq + 1;
+
+            size_t vlen = strlen(val);                   /* trim trailing space/EOL */
+            while (vlen && (val[vlen-1] == '\n' || val[vlen-1] == '\r'
+                            || val[vlen-1] == ' ' || val[vlen-1] == '\t'))
+                val[--vlen] = '\0';
+            if (vlen >= 2 && (val[0] == '"' || val[0] == '\'')
+                && val[vlen-1] == val[0]) {              /* strip matching quotes */
+                val[vlen-1] = '\0';
+                val++;
+            }
+
+            for (int k = 0; keys[k]; k++) {
+                if (strcmp(key, keys[k]) == 0) { setenv(key, val, 1); break; }
+            }
+        }
+        fclose(fp);
+    }
+
+    /* Nothing configured? Still guarantee a UTF-8-capable session. */
+    if (!getenv("LANG") && !getenv("LC_ALL") && !getenv("LC_CTYPE"))
+        setenv("LANG", "C.UTF-8", 1);
 }
 
 static int pam_conversation(int num_msg, const struct pam_message **msg,
@@ -192,6 +249,9 @@ static gboolean launch_session(gpointer user_data) {
         setenv("XDG_SEAT",        "seat0",       1);
         /* No XAUTHORITY — Xorg was started with -ac (no access control) */
         unsetenv("XAUTHORITY");
+
+        /* Restore the locale the cleared env dropped, so the session is UTF-8. */
+        load_locale_env();
 
         if (chdir(pw->pw_dir) != 0) { if (chdir("/") != 0) { /* nowhere to go */ } }
 
