@@ -1,39 +1,167 @@
-CC          = gcc
-GTK_VERSION ?= 3
+# simple-login-gui
+#
+# One binary. X11 + Cairo + FreeType + libjpeg + PAM, and nothing else -- no GTK, no GLib, no
+# toolkit. C++17 for the drawing and windowing layers, plain C11 for the PAM, privilege-drop
+# and session-launch code.
+#
+# THE GFX LAYER DELIBERATELY DOES NOT LINK X11. canvas, fontstack and image need cairo and
+# nothing more, which is what lets tools/uirender compose and audit the whole layout with no X
+# server running. Keep it that way: an #include of Xlib.h in src/gfx/ costs the headless audit.
 
-GTK2_NOWARN = $(if $(filter 2,$(GTK_VERSION)),-Wno-deprecated-declarations,)
+CC      ?= gcc
+CXX     ?= g++
 
-CFLAGS  = -Wall -Wextra -Wformat=2 -Wformat-security -O2 \
-          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE \
-          $(GTK2_NOWARN) \
-          $(shell pkg-config --cflags gtk+-$(GTK_VERSION).0)
-LDFLAGS = $(shell pkg-config --libs gtk+-$(GTK_VERSION).0) -lpam \
-          -pie -Wl,-z,relro,-z,now
+# The version, and the prefix the paths below are COMPILED INTO the binary.
+#
+# The prefix is not a cosmetic default. XLOGIN_RESOURCE_DIR_DEFAULT, XLOGIN_BACKGROUND_DIR and
+# XLOGIN_CONFIG_PATH are baked in at compile time, so a binary is only correct at the prefix it
+# was built for -- which is why the release archive is an absolute tree unpacked at / rather
+# than something relocatable. Change it here and rebuild; do not move the files afterwards.
+VERSION     ?= 1.0.4
 
-TARGET = xlogin-gtk$(GTK_VERSION)
-SRC    = src/main.c
+PREFIX      ?= /usr/local
+BINDIR      ?= $(PREFIX)/bin
+SHAREDIR    ?= $(PREFIX)/share/xlogin
+BGDIR       ?= $(SHAREDIR)/backgrounds
+SYSCONFDIR  ?= /etc
 
-.PHONY: all both install clean uninstall
+# --- packages, each verified present with pkg-config before use ---------------------------
+GFX_PKGS  = cairo cairo-ft freetype2
+X11_PKGS  = cairo-xlib x11 xrandr
+JPEG_PKGS = libjpeg
 
-all: $(TARGET)
+GFX_CFLAGS  := $(shell pkg-config --cflags $(GFX_PKGS) $(JPEG_PKGS))
+GFX_LIBS    := $(shell pkg-config --libs   $(GFX_PKGS) $(JPEG_PKGS))
+X11_CFLAGS  := $(shell pkg-config --cflags $(X11_PKGS))
+X11_LIBS    := $(shell pkg-config --libs   $(X11_PKGS))
 
-both:
-	$(MAKE) GTK_VERSION=3
-	$(MAKE) GTK_VERSION=2
+# --- warnings and hardening ---------------------------------------------------------------
+# -Werror is not negotiable: this tree vendors no upstream source, so every warning is ours.
+WARN     = -Wall -Wextra -Werror -Wformat=2 -Wformat-security
+HARDEN   = -O2 -fstack-protector-strong -fstack-clash-protection -fcf-protection=full \
+           -D_FORTIFY_SOURCE=3 -fPIE
+LDHARDEN = -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
 
-$(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+DEFS = -DXLOGIN_RESOURCE_DIR_DEFAULT=\"$(SHAREDIR)\" \
+       -DXLOGIN_BACKGROUND_DIR=\"$(BGDIR)\" \
+       -DXLOGIN_CONFIG_PATH=\"$(SYSCONFDIR)/xlogin.conf\" \
+       -DXLOGIN_VERSION=\"$(VERSION)\"
 
-install: all
-	install -m 755 $(TARGET) /usr/local/bin/xlogin
-	install -m 755 xlogin-launcher /usr/local/bin/
-	install -m 644 pam.d/xlogin /etc/pam.d/
+# -MMD -MP writes a .d file beside each .o listing the headers it included, so editing a
+# header rebuilds everything that includes it. Without this, `make` after a header-only edit
+# reports success against stale objects -- which is exactly how a Target::None that only fails
+# in one translation unit got past a green build and was caught by the phase gate's `make -B`.
+DEPFLAGS = -MMD -MP
+
+COMMON   = $(WARN) $(HARDEN) $(DEFS) $(DEPFLAGS) -Isrc
+CFLAGS   += -std=c11   $(COMMON)
+CXXFLAGS += -std=c++17 $(COMMON)
+
+PAM_LIBS = -lpam
+
+# --- objects ------------------------------------------------------------------------------
+# GFX_OBJS is everything tools/uirender can link: cairo only, no X11. ui/panel.o is in here
+# deliberately -- the entire visible surface of the login screen is auditable headlessly
+# because of it, and an #include of Xlib.h under src/gfx/ or src/ui/ would silently cost that.
+GFX_OBJS = src/gfx/canvas.o src/gfx/fontstack.o src/gfx/image.o src/gfx/textfield.o \
+           src/gfx/widgets.o src/gfx/menu.o src/ui/panel.o
+PLAT_OBJS = src/platform/xerror.o src/platform/respath.o src/platform/x11window.o
+SESSION_OBJS = src/session/auth.o src/session/launch.o src/session/cleanup.o \
+               src/session/power.o src/config.o
+MAIN_OBJS = src/main.o
+
+.PHONY: all clean install uninstall gfx tools
+
+all: xlogin tools
+
+gfx: $(GFX_OBJS)
+tools: tools/uirender
+
+# Linked with g++: the C++ half needs the runtime, and the C half does not care.
+xlogin: $(MAIN_OBJS) $(GFX_OBJS) $(PLAT_OBJS) $(SESSION_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(GFX_LIBS) $(X11_LIBS) $(PAM_LIBS) $(LDHARDEN)
+
+# gfx objects: cairo only, no X11 in the include path at all.
+src/gfx/%.o: src/gfx/%.cpp
+	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) -c -o $@ $<
+
+src/ui/%.o: src/ui/%.cpp
+	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) -c -o $@ $<
+
+src/main.o: src/main.cpp
+	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) $(X11_CFLAGS) -c -o $@ $<
+
+src/platform/%.o: src/platform/%.cpp
+	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) $(X11_CFLAGS) -c -o $@ $<
+
+src/session/%.o: src/session/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# src/config.c is the only C file outside src/session/: it is read by the C++ half and
+# written by the menu, and it parses a file that /bin/sh sources, so it belongs in the
+# language with no hidden allocation for the same reason the session half does.
+src/%.o: src/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+tools/uirender: tools/uirender.o $(GFX_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(GFX_LIBS) $(LDHARDEN)
+
+tools/%.o: tools/%.cpp
+	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) -c -o $@ $<
+
+# Generated by -MMD; absent on the first build, which `-include` tolerates silently.
+DEPS = $(GFX_OBJS:.o=.d) $(PLAT_OBJS:.o=.d) $(SESSION_OBJS:.o=.d) $(MAIN_OBJS:.o=.d) \
+       tools/uirender.d
+-include $(DEPS)
 
 clean:
-	rm -f xlogin-gtk3 xlogin-gtk2
+	rm -f $(GFX_OBJS) $(PLAT_OBJS) $(SESSION_OBJS) $(MAIN_OBJS) tools/*.o tools/uirender xlogin
+	rm -f $(DEPS)
+
+# --- install --------------------------------------------------------------------------------
+# DESTDIR is honoured throughout so this can be staged into a package root.
+#
+# NOTE what is NOT here: /etc/inittab, the user's groups, ~/.xinitrc and /etc/xlogin.conf.
+# Those are decisions about a particular machine and its users, and install.sh asks about them.
+# `make install` puts files where they go and changes nothing else -- so it is safe to re-run,
+# and in particular it will not overwrite a config that has a background setting in it.
+install: xlogin
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 755 xlogin                    $(DESTDIR)$(BINDIR)/xlogin
+	install -m 755 xlogin-launcher           $(DESTDIR)$(BINDIR)/xlogin-launcher
+	install -d $(DESTDIR)$(SYSCONFDIR)/pam.d
+	install -m 644 pam.d/xlogin              $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin
+	install -d $(DESTDIR)$(SYSCONFDIR)/init.d
+	install -m 755 etc_init.d_xlogin-launcher $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
+	install -d $(DESTDIR)$(SYSCONFDIR)/polkit-1/rules.d
+	install -m 644 polkit/10-local.rules     $(DESTDIR)$(SYSCONFDIR)/polkit-1/rules.d/10-local.rules
+	install -d $(DESTDIR)$(SHAREDIR)/fonts
+	install -m 644 resources/fonts/Michroma-Regular.ttf $(DESTDIR)$(SHAREDIR)/fonts/
+	install -m 644 resources/fonts/Roboto-Regular.ttf   $(DESTDIR)$(SHAREDIR)/fonts/
+	install -m 644 resources/fonts/Michroma-OFL.txt     $(DESTDIR)$(SHAREDIR)/fonts/
+	install -m 644 resources/fonts/Roboto-LICENSE.txt   $(DESTDIR)$(SHAREDIR)/fonts/
+	install -m 644 NOTICE                    $(DESTDIR)$(SHAREDIR)/NOTICE
+# The backgrounds directory is 755 and root-owned ON PURPOSE, and the program refuses to read
+# anything from it that is not a root-owned regular file. An image decoder is a parser, and
+# this one runs as root before anybody has authenticated -- the mitigation is that the only
+# people who can put a file here are people who are already root.
+# Ownership is not forced here -- `sudo make install` already creates it as root, and
+# forcing it breaks a staged build into a package root as an ordinary user. If it somehow
+# ends up owned by anybody else, the program refuses to read images from it and draws the
+# flat ground, which is the safe way for that to fail.
+	install -d -m 755 $(DESTDIR)$(BGDIR)
+	@echo
+	@echo "Installed. NOT done by this target, because they are decisions about this machine:"
+	@echo "  /etc/inittab            (replace the tty1 getty with xlogin-launcher)"
+	@echo "  /etc/xlogin.conf        (XSERVER_FLAGS for your GPU; XLOGIN_CONSOLE_VT)"
+	@echo "  group membership        (input, video, plugdev)"
+	@echo "  ~/.xinitrc              (what the session actually runs)"
+	@echo "Run install.sh to be asked about those, or see README.md to do it by hand."
 
 uninstall:
-	rm -f /usr/local/bin/xlogin
-	rm -f /usr/local/bin/xlogin-launcher
-	rm -f /etc/pam.d/xlogin
-	rm -f /etc/xlogin.conf
+	rm -f $(DESTDIR)$(BINDIR)/xlogin $(DESTDIR)$(BINDIR)/xlogin-launcher
+	rm -f $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin
+	rm -f $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
+# /etc/xlogin.conf is deliberately left: it holds XSERVER_FLAGS, which somebody may have had
+# to work out for their GPU, and removing a binary is not a reason to throw that away.
+	rm -rf $(DESTDIR)$(SHAREDIR)
