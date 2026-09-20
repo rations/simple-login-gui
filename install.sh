@@ -428,7 +428,7 @@ echo "    Logging out of a graphical session returns you to the current display"
 echo "    manager, not xlogin. A full reboot is required."
 echo "  - Users can customise their session by editing ~/.xinitrc"
 echo "  - To add another user, re-run this script or manually:"
-echo "      usermod -aG input,video <username>"
+echo "      usermod -aG input,video,plugdev <username>"
 echo "      cp /etc/skel/.xinitrc /home/<username>/.xinitrc"
 echo "      chown <username>:<username> /home/<username>/.xinitrc"
 echo

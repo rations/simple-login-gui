@@ -48,6 +48,11 @@ void Panel::layout(const Rect &screen, const Rect &primary)
 
     mPanel = Rect(px, py, geo::kPanelW, geo::kPanelH);
 
+    // An open menu was placed against the Options button and clamped to the screen, and both
+    // of those have just moved. It has to be placed again or it is left drawing at
+    // coordinates that no longer mean anything.
+    const bool menuWasOpen = mMenu.isOpen();
+
     mUser.configure(Rect(px + geo::kFieldX, py + geo::kUserFieldY, geo::kFieldW, geo::kFieldH),
                     "username", false);
     mPass.configure(Rect(px + geo::kFieldX, py + geo::kPassFieldY, geo::kFieldW, geo::kFieldH),
@@ -66,6 +71,12 @@ void Panel::layout(const Rect &screen, const Rect &primary)
         if (cb.menuAction)
             cb.menuAction(item);
     };
+    // Note that this also disarms a pending Shutdown or Restart confirmation, because open()
+    // clears the armed row. That is the behaviour to want: the screen has just changed shape
+    // under the pointer, so the row sitting under it is not the row the user aimed at, and
+    // the two entries that need a second click are the two that power the machine off.
+    if (menuWasOpen)
+        mMenu.open(mOptions.rect, mScreen);
 }
 
 void Panel::openMenu()

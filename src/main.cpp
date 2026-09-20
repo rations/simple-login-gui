@@ -150,6 +150,16 @@ public:
         }
     }
 
+    // The screen changed size. Everything the panel owns is positioned against the screen
+    // rectangle, so laying out again against the new one is the entire fix -- the background
+    // needs no reload because it is scaled to the screen rect at draw time, and the fields
+    // keep what is typed in them because configure() only moves them.
+    void relayout(const Rect &screen, const Rect &primary)
+    {
+        mPanel.layout(screen, primary);
+        mWin.invalidate();
+    }
+
     ~App()
     {
         if (mBackground)
@@ -633,6 +643,7 @@ int main(int argc, char **argv)
         return app.key(sym, text, len, state);
     };
     cb.tick = [&app] { app.tick(); };
+    cb.resized = [&app](const Rect &screen, const Rect &primary) { app.relayout(screen, primary); };
 
     win.run(cb);
 

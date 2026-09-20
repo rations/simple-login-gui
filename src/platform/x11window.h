@@ -80,6 +80,10 @@ public:
         std::function<bool(KeySym sym, const char *text, int len, unsigned state)> key;
         // Called every tickMs, whether or not anything is dirty.
         std::function<void()> tick;
+        // The screen changed size under us, and everything laid out against the old one is
+        // now wrong. Both rects are logical units at the NEW scale. A session that sets its
+        // own video mode and exits without restoring it is the case this exists for.
+        std::function<void(const Rect &screen, const Rect &primary)> resized;
     };
 
     // Opens the display, covers the screen, loads the fonts. Returns false having already
@@ -167,7 +171,8 @@ public:
     // single-head machine gets.
     Rect primaryBounds() const
     {
-        return mPrimary;
+        return Rect(mPrimaryPx.x / mScale, mPrimaryPx.y / mScale, mPrimaryPx.w / mScale,
+                    mPrimaryPx.h / mScale);
     }
 
     bool fontsAreBundled() const
@@ -179,6 +184,15 @@ private:
     void paint(const Callbacks &cb);
     void close();
     void resolvePrimary();
+    // Re-derive everything that depends on the screen size, in dependency order: which output
+    // the panel belongs on, the scale that output asks for, then the logical extent.
+    void applyGeometry();
+    // Re-read the screen size from the server and, if it moved, resize the window and the
+    // target surface to match. True when anything changed.
+    bool syncScreenGeometry();
+    // syncScreenGeometry() plus the `resized` callback that tells the caller to lay out
+    // again. Cheap and safe to call when nothing has changed.
+    void refreshGeometry();
     void openInputMethod();
     void closeInputMethod();
 
@@ -198,9 +212,23 @@ private:
     FontStack mFonts;
     bool mFontsLoaded = false;
 
+    ::Window mRoot = 0;
     int mPixelW = 0, mPixelH = 0;
     float mLogicalW = 0, mLogicalH = 0, mScale = 1.0f;
-    Rect mPrimary;
+    // True when open() was asked to choose the scale. A screen change may only recompute a
+    // scale this window chose; one the caller passed in is the caller's business.
+    bool mAutoScale = true;
+    // The primary output IN PIXELS, not logical units. The scale is derived from its height,
+    // so storing it already divided by the scale would make that circular.
+    Rect mPrimaryPx;
+    // RandR's first event code, and whether the extension answered at all. An extension's
+    // event codes are assigned at runtime, so RRScreenChangeNotify cannot be a switch label.
+    int mRREventBase = 0;
+    bool mRandr = false;
+    // Set when the geometry changed with no callbacks installed to tell, and cleared by the
+    // delivery at the top of run(). Without it that change is silently swallowed and the
+    // panel goes on being laid out for a screen that is not there any more.
+    bool mResizePending = false;
     int mTickMs = 250;
     // The callbacks run() was given, so paintNow() can compose the same frame the loop would.
     // Null outside run().

@@ -82,6 +82,7 @@ float X11Window::autoScale(int pixelH)
 bool X11Window::open(const std::string &title, float scale, int tickMs)
 {
     mScale = scale > 0.0f ? scale : 1.0f;
+    mAutoScale = scale <= 0.0f;
     mTickMs = tickMs > 0 ? tickMs : 250;
 
     mDpy = XOpenDisplay(nullptr);
@@ -95,14 +96,13 @@ bool X11Window::open(const std::string &title, float scale, int tickMs)
     registerDisplay(mDpy);
 
     const int screen = DefaultScreen(mDpy);
+    mRoot = RootWindow(mDpy, screen);
     mPixelW = DisplayWidth(mDpy, screen);
     mPixelH = DisplayHeight(mDpy, screen);
-    // Deferred until the screen size is known, which is why `scale <= 0` is a request rather
-    // than something the caller could have computed itself.
-    if (scale <= 0.0f)
-        mScale = autoScale(mPixelH);
-    mLogicalW = static_cast<float>(mPixelW) / mScale;
-    mLogicalH = static_cast<float>(mPixelH) / mScale;
+    // The scale and the logical extent are NOT computed here. They come from applyGeometry()
+    // below, once the window exists and Xrandr can be asked which output the panel is on --
+    // which is also the path a later screen change takes, so there is one implementation of
+    // this arithmetic and not two that can drift.
 
     const unsigned long before = errorCount();
 
@@ -151,7 +151,19 @@ bool X11Window::open(const std::string &title, float scale, int tickMs)
         return false;
     }
 
-    resolvePrimary();
+    // Ask to be told when the screen changes size. This is the login screen's most important
+    // subscription after the keyboard: the X server outlives every session, and a session is
+    // entitled to set its own video mode and leave it set.
+    int rrError = 0;
+    mRandr = XRRQueryExtension(mDpy, &mRREventBase, &rrError) == True; // cites: Xrandr.h:160
+    if (mRandr) {
+        // cites: Xrandr.h:220, randr.h:117
+        XRRSelectInput(mDpy, mRoot, RRScreenChangeNotifyMask);
+    } else {
+        fprintf(stderr, "xlogin: no RandR extension; a screen resize will go unnoticed\n");
+    }
+
+    applyGeometry();
     openInputMethod();
     takeFocus();
 
@@ -173,7 +185,7 @@ bool X11Window::open(const std::string &title, float scale, int tickMs)
 // machine with no Xrandr configuration reports.
 void X11Window::resolvePrimary()
 {
-    mPrimary = bounds();
+    mPrimaryPx = Rect(0, 0, static_cast<float>(mPixelW), static_cast<float>(mPixelH));
 
     XRRScreenResources *res = XRRGetScreenResourcesCurrent(mDpy, mWin);
     if (!res)
@@ -185,10 +197,9 @@ void X11Window::resolvePrimary()
             if (oi->crtc != None) {
                 if (XRRCrtcInfo *ci = XRRGetCrtcInfo(mDpy, res, oi->crtc)) {
                     if (ci->width > 0 && ci->height > 0) {
-                        mPrimary = Rect(static_cast<float>(ci->x) / mScale,
-                                        static_cast<float>(ci->y) / mScale,
-                                        static_cast<float>(ci->width) / mScale,
-                                        static_cast<float>(ci->height) / mScale);
+                        mPrimaryPx =
+                            Rect(static_cast<float>(ci->x), static_cast<float>(ci->y),
+                                 static_cast<float>(ci->width), static_cast<float>(ci->height));
                     }
                     XRRFreeCrtcInfo(ci);
                 }
@@ -198,6 +209,88 @@ void X11Window::resolvePrimary()
     }
 
     XRRFreeScreenResources(res);
+}
+
+//------------------------------------------------------------------------
+// Everything that follows from the screen size, in the order its dependencies run.
+void X11Window::applyGeometry()
+{
+    resolvePrimary();
+
+    if (mAutoScale) {
+        // From the PRIMARY OUTPUT's height, not the framebuffer's. The two differ in exactly
+        // the cases where the difference matters: a dual-head machine whose framebuffer is
+        // the bounding box of both screens, and a panning configuration where the framebuffer
+        // is deliberately larger than the mode being displayed. In both, the framebuffer
+        // height is not the height of the screen anybody is looking at, and scaling to it
+        // gives a panel too big to fit on the one the panel is centred on.
+        const int h = mPrimaryPx.h > 0.0f ? static_cast<int>(mPrimaryPx.h) : mPixelH;
+        mScale = autoScale(h);
+    }
+
+    mLogicalW = static_cast<float>(mPixelW) / mScale;
+    mLogicalH = static_cast<float>(mPixelH) / mScale;
+}
+
+//------------------------------------------------------------------------
+// Re-read the screen size and make the window, the surface and the scale agree with it.
+//
+// THIS IS THE ONE THAT MATTERS ON THE LOGOUT PATH, and it is the bug it was written for: the
+// X server outlives the session, so a desktop that sets 1920x1080 on a monitor whose preferred
+// mode is 3840x2160 hands back a 1920x1080 screen when it exits. Nothing resized this window
+// when that happened. The login screen then returns composed for the screen it started on --
+// a panel scaled for 4K, centred where the middle of a 4K screen used to be, with only its
+// top-left corner inside the part of it anybody can see. It reads as a zoomed-in login box
+// with the entry fields off the bottom of the monitor.
+//
+// The size is read with XGetGeometry rather than DisplayWidth/DisplayHeight. Those return the
+// Screen struct cached when the connection was set up, which only follows a resize if every
+// path that reaches here has first handed the event to XRRUpdateConfiguration. A round trip
+// to the server cannot be stale and does not depend on having seen the event at all -- which
+// is what makes this correct on the return path even if RandR is missing entirely.
+bool X11Window::syncScreenGeometry()
+{
+    if (!mDpy || !mWin)
+        return false;
+
+    ::Window rootRet = 0;
+    int rx = 0, ry = 0;
+    unsigned rw = 0, rh = 0, rborder = 0, rdepth = 0;
+    if (!XGetGeometry(mDpy, mRoot, &rootRet, &rx, &ry, &rw, &rh, &rborder, &rdepth))
+        return false;
+    if (rw == 0 || rh == 0)
+        return false;
+    if (static_cast<int>(rw) == mPixelW && static_cast<int>(rh) == mPixelH)
+        return false;
+
+    mPixelW = static_cast<int>(rw);
+    mPixelH = static_cast<int>(rh);
+
+    XMoveResizeWindow(mDpy, mWin, 0, 0, rw, rh);
+    // Before the surface is told its new size, because the resize is a request like any other
+    // and Cairo would otherwise draw to a drawable the server has not grown yet.
+    XSync(mDpy, False);
+
+    // The surface caches the drawable's dimensions and clips to them; without this it keeps
+    // clipping to the old size no matter what the drawable underneath it now is.
+    // cites: cairo-xlib.h:63
+    if (mTarget)
+        cairo_xlib_surface_set_size(mTarget, mPixelW, mPixelH);
+
+    applyGeometry();
+    mDirty = true;
+    return true;
+}
+
+//------------------------------------------------------------------------
+void X11Window::refreshGeometry()
+{
+    if (!syncScreenGeometry())
+        return;
+    if (mActive && mActive->resized)
+        mActive->resized(bounds(), primaryBounds());
+    else
+        mResizePending = true;
 }
 
 //------------------------------------------------------------------------
@@ -290,6 +383,12 @@ void X11Window::show()
 {
     if (!mDpy || !mWin)
         return;
+    // Before the map, not after. The session that has just exited may have left the screen at
+    // a size this window was never told about, and mapping first would put one frame of the
+    // wrong thing on the screen before the correction arrived. It also makes the return path
+    // correct without having had to receive the RandR event at all -- which matters, because
+    // this is the path a user actually notices when it is wrong.
+    refreshGeometry();
     XMapRaised(mDpy, mWin);
     // The map is asynchronous and takeFocus() refuses to focus a window that is not yet
     // viewable, so the round trip is needed before it, not after.
@@ -453,6 +552,14 @@ void X11Window::run(const Callbacks &cb)
     mDirty = true;
     mActive = &cb;
 
+    // A resize that happened before there was anybody to tell. Delivering it here rather than
+    // dropping it is what stops the loop opening with a layout for the wrong screen.
+    if (mResizePending) {
+        mResizePending = false;
+        if (cb.resized)
+            cb.resized(bounds(), primaryBounds());
+    }
+
     const int xfd = ConnectionNumber(mDpy);
 
     while (mRunning) {
@@ -470,9 +577,28 @@ void X11Window::run(const Callbacks &cb)
             if (XFilterEvent(&ev, None))
                 continue;
 
+            // Before the switch, because an extension's event codes are handed out at
+            // runtime and cannot be case labels. cites: randr.h:130
+            if (mRandr && ev.type == mRREventBase + RRScreenChangeNotify) {
+                // Brings Xlib's cached idea of the screen size back in step with the server's.
+                // cites: Xrandr.h:446-450
+                XRRUpdateConfiguration(&ev);
+                refreshGeometry();
+                continue;
+            }
+
             switch (ev.type) {
                 case Expose:
                     mDirty = true;
+                    break;
+
+                case ConfigureNotify:
+                    // Our own window changed shape. Normally that is our own
+                    // XMoveResizeWindow coming back, in which case the re-read finds nothing
+                    // to do and this costs one round trip; but it is also the only notice we
+                    // get on a server whose RandR did not answer.
+                    if (ev.xconfigure.window == mWin)
+                        refreshGeometry();
                     break;
 
                 case FocusOut:
