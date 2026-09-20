@@ -91,9 +91,12 @@ public:
         return mRect;
     }
 
+    // Which row is under this point, or -1. Public because the panel pairs a press with a
+    // release and has to ask what each one was over -- see Panel::targetAt.
+    int rowAt(float x, float y) const;
+
 private:
     void activateRow(int row);
-    int rowAt(float x, float y) const;
     Rect rowRect(int row) const;
 
     std::vector<MenuItem> mItems;

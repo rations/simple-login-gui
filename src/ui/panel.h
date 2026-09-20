@@ -132,6 +132,20 @@ private:
 
     Focus mFocus = Focus::User;
 
+    // What the last ButtonPress landed on, so that a release only acts if it comes up over
+    // the same thing. Without this, pressing anywhere and releasing over a control activates
+    // it -- which means there is no way to change your mind, and the usual way out of a
+    // mis-aimed click (move off the control before letting go) does nothing.
+    // Nothing, not None: X11/X.h has `#define None 0L` (cites: X11/X.h:141), and src/main.cpp
+    // includes both this header and Xlib.h, so `Target::None` expands to `Target::0L` there.
+    // Second time this project has hit it, in a header that does not itself include any X
+    // header -- which is the part that makes it easy to hit. See also Key::Plain.
+    enum class Target { Nothing, User, Pass, Options, Login, MenuRow, MenuOutside };
+    Target targetAt(float x, float y, int &row) const;
+
+    Target mPressTarget = Target::Nothing;
+    int mPressRow = -1;
+
     Rect mScreen;
     Rect mPanel;
 

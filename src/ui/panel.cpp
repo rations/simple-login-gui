@@ -162,40 +162,88 @@ void Panel::motion(float x, float y)
     mOptions.hovered = mOptions.enabled && mOptions.rect.contains(x, y);
 }
 
+// What is under this point. One function, used by both halves of a click, so press and
+// release cannot disagree about what they were over.
+Panel::Target Panel::targetAt(float x, float y, int &row) const
+{
+    row = -1;
+
+    if (mMenu.isOpen()) {
+        if (!mMenu.rect().contains(x, y))
+            return Target::MenuOutside;
+        row = mMenu.rowAt(x, y);
+        return Target::MenuRow;
+    }
+
+    if (mOptions.hit(x, y))
+        return Target::Options;
+    if (mLogin.hit(x, y))
+        return Target::Login;
+    if (mUser.enabled() && mUser.rect().contains(x, y))
+        return Target::User;
+    if (mPass.enabled() && mPass.rect().contains(x, y))
+        return Target::Pass;
+    return Target::Nothing;
+}
+
 void Panel::click(float x, float y, bool pressed)
 {
-    // Act on release, not press. A button that fires under the finger cannot be escaped by
-    // moving off it before letting go, and one of these buttons will eventually open a menu
-    // whose entries power the machine off.
-    if (pressed)
+    int row = -1;
+    const Target hitTarget = targetAt(x, y, row);
+
+    if (pressed) {
+        // Remember and do nothing else. Acting on press means a control fires under the
+        // finger with no way to change your mind -- and one of these buttons opens a menu
+        // whose entries power the machine off.
+        mPressTarget = hitTarget;
+        mPressRow = row;
+        return;
+    }
+
+    // Release. Act only if it came up over the same thing the press went down on.
+    const Target pressed_on = mPressTarget;
+    const int pressedRow = mPressRow;
+    mPressTarget = Target::Nothing;
+    mPressRow = -1;
+
+    if (hitTarget != pressed_on)
         return;
 
-    // An open menu gets every click, including the ones outside it -- that click closes it
-    // and is consumed, so a mis-aimed dismissal cannot land on Log in.
-    if (mMenu.isOpen()) {
-        mMenu.click(x, y);
-        return;
-    }
+    switch (hitTarget) {
+        case Target::MenuOutside:
+            // A click outside an open menu closes it and is SWALLOWED -- it does not also
+            // press whatever was underneath. That is what every menu does, and it is what
+            // stops a mis-aimed dismissal landing on Log in.
+            mMenu.close();
+            return;
 
-    if (mOptions.hit(x, y)) {
-        if (cb.options)
-            cb.options();
-        return;
-    }
-    if (mLogin.hit(x, y)) {
-        if (cb.submit)
-            cb.submit();
-        return;
-    }
-    if (mUser.rect().contains(x, y) && mUser.enabled()) {
-        setFocus(Focus::User);
-        mUser.handleClick(x, y);
-        return;
-    }
-    if (mPass.rect().contains(x, y) && mPass.enabled()) {
-        setFocus(Focus::Pass);
-        mPass.handleClick(x, y);
-        return;
+        case Target::MenuRow:
+            if (row >= 0 && row == pressedRow)
+                mMenu.click(x, y);
+            return;
+
+        case Target::Options:
+            if (cb.options)
+                cb.options();
+            return;
+
+        case Target::Login:
+            if (cb.submit)
+                cb.submit();
+            return;
+
+        case Target::User:
+            setFocus(Focus::User);
+            mUser.handleClick(x, y);
+            return;
+
+        case Target::Pass:
+            setFocus(Focus::Pass);
+            mPass.handleClick(x, y);
+            return;
+
+        case Target::Nothing:
+            return;
     }
 }
 

@@ -45,18 +45,25 @@ echo "  layout audit passed."
 # The list of ignored names is ASKED OF GIT rather than written out here. Writing
 # them out would mean this script itself named them, which is the thing being
 # forbidden -- and it would go stale the first time somebody added another one.
+# Any leftover release directory from a previous run is itself git-ignored, so it would
+# join the list of names below and be searched for. Clear it first.
+rm -rf "$RELEASE_NAME"
+
 echo "Sweeping for local-only references..."
 # Build artifacts are ignored too and are not what this is looking for, so they are
 # dropped -- as is any name shorter than four characters, which would be too generic
 # to search a source tree for without matching something innocent.
 IGNORED_NAMES=$(git ls-files --others --ignored --exclude-standard --directory |
                 sed 's:/*$::' | xargs -r -n1 basename | sort -u |
-                grep -vE '^(xlogin|uirender|.*\.(o|so|a|tar\.gz))$' |
+                grep -vE '^(xlogin|uirender|.*\.(o|d|so|a|tar\.gz))$' |
                 grep -E '^.{4,}$' || true)
 
+# Each name is anchored with a trailing word boundary. Without it the match is a bare
+# substring and a generated name like `panel.d` matches `panel.draw(c)` in ordinary source
+# -- which it did, the first time the dependency files existed.
 PATTERN='/home/[A-Za-z0-9._-]'
 for NAME in $IGNORED_NAMES; do
-    PATTERN="$PATTERN|$(printf '%s' "$NAME" | sed 's/[.[\*^$]/\\&/g')"
+    PATTERN="$PATTERN|$(printf '%s' "$NAME" | sed 's/[.[\*^$]/\\&/g')\\b"
 done
 
 LEAKS=$(git ls-files -z | grep -zv '^\.gitignore$' |
@@ -99,8 +106,9 @@ cp docs/screenshot.png        "$RELEASE_NAME/docs/"
 
 chmod +x "$RELEASE_NAME/install.sh" "$RELEASE_NAME/uninstall.sh"
 
-# Object files from the build above must not travel.
-find "$RELEASE_NAME" -name '*.o' -delete
+# Build leftovers must not travel. The src/*/* copies above are wildcards, so both the
+# objects and the -MMD dependency files land in them.
+find "$RELEASE_NAME" -type f \( -name '*.o' -o -name '*.d' \) -delete
 echo "  done."
 echo
 
@@ -114,7 +122,7 @@ if ! ( cd "$RELEASE_NAME" && make > /dev/null 2>&1 ); then
     exit 1
 fi
 ( cd "$RELEASE_NAME" && make clean > /dev/null 2>&1 )
-find "$RELEASE_NAME" -name '*.o' -delete
+find "$RELEASE_NAME" -type f \( -name '*.o' -o -name '*.d' \) -delete
 rm -f "$RELEASE_NAME/xlogin" "$RELEASE_NAME/tools/uirender"
 echo "  the release tree builds."
 echo

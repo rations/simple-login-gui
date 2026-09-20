@@ -4,6 +4,7 @@
 /xlogin
 /tools/uirender
 *.o
+*.d
 *.so
 *.a
 build/

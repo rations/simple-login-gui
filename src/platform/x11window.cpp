@@ -15,6 +15,7 @@
 
 #include <sys/select.h>
 #include <sys/time.h>
+#include <syslog.h>
 #include <time.h>
 
 #include <cerrno>
@@ -306,6 +307,15 @@ bool X11Window::grabKeyboard()
         return true;
 
     for (int attempt = 0; attempt < kGrabAttempts; ++attempt) {
+        // THE FOURTH ARGUMENT IS pointer_mode, AND IT MUST STAY GrabModeAsync.
+        // XGrabKeyboard takes a pointer mode as well as a keyboard mode
+        // (cites: Xlib.h:2730-2737, the argument order is
+        //  display, grab_window, owner_events, pointer_mode, keyboard_mode, time).
+        // GrabModeSync there FREEZES THE POINTER until the client calls XAllowEvents -- a
+        // keyboard grab that silently kills the mouse. On this screen that would mean the
+        // Options button, and therefore every way off this screen that is not the keyboard,
+        // stops responding. The two GrabModeAsync arguments are not interchangeable
+        // boilerplate; the first one is load-bearing.
         const int r = XGrabKeyboard(mDpy, mWin, True, GrabModeAsync, GrabModeAsync, CurrentTime);
         if (r == GrabSuccess) {
             mGrabbed = true;
@@ -316,8 +326,18 @@ bool X11Window::grabKeyboard()
 
     // Deliberately not fatal. A login screen that will not accept typing is a worse outcome
     // than one typed without a grab, and the grab is a hardening measure against a local client
-    // that, before anybody has logged in, should not exist.
+    // that, before anybody has logged in, should not exist. Typing still works without it,
+    // because the input focus is set explicitly by takeFocus() and does not depend on the grab.
+    //
+    // Logged to syslog as well as stderr, and this is the reason: on tty1 stderr is underneath
+    // the X server, so nobody ever sees it. Without the grab the password is readable by any
+    // client that can reach the display, which is a security property quietly going missing --
+    // exactly the kind of thing that must not be discoverable only by reading the code.
     fprintf(stderr, "xlogin: could not grab the keyboard; another client is holding it\n");
+    syslog(LOG_AUTHPRIV | LOG_WARNING,
+           "could not grab the keyboard after %d attempts; another client holds it. Keystrokes "
+           "on this display are readable by other clients until it is released.",
+           kGrabAttempts);
     return false;
 }
 
@@ -459,7 +479,27 @@ void X11Window::run(const Callbacks &cb)
                     // Nothing should be able to take the focus -- there is no window manager
                     // and no other client that ought to exist yet -- so if something did, take
                     // it back rather than silently stop accepting keystrokes.
-                    takeFocus();
+                    //
+                    // BUT NOT EVERY FocusOut IS A LOST FOCUS. A keyboard grab generates one
+                    // with mode NotifyGrab, and releasing it generates one with NotifyUngrab
+                    // (cites: X11/X.h:268-269) -- so our OWN grabKeyboard() and
+                    // ungrabKeyboard() each produce a FocusOut here. Acting on those means
+                    // answering our own grab with an XSetInputFocus, every time, for nothing.
+                    //
+                    // It is worse than noise in the case that actually bites: if another
+                    // client is taking the keyboard -- which is how this failed in a sibling
+                    // project, AlreadyGrabbed on every attempt because a desktop held it --
+                    // then every grab and ungrab IT does lands here too, and we answer each
+                    // one by snatching the focus back while it still holds the grab. That is
+                    // a focus fight with a client we cannot win against, and it presents as a
+                    // screen that will not respond.
+                    //
+                    // Only a real transition is worth reacting to. NotifyPointer is likewise
+                    // a pointer-crossing pseudo-focus (X.h:281), not a focus change.
+                    if ((ev.xfocus.mode == NotifyNormal || ev.xfocus.mode == NotifyWhileGrabbed) &&
+                        ev.xfocus.detail != NotifyPointer) {
+                        takeFocus();
+                    }
                     break;
 
                 case ButtonPress:
