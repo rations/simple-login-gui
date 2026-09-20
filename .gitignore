@@ -1,8 +1,28 @@
-# Build artifacts
-xlogin
+# Build artifacts.
+# Anchored with a leading slash: an unanchored `xlogin` also matches pam.d/xlogin, which is a
+# tracked, required config file.
+/xlogin
+/xlogin-gtk2
+/xlogin-gtk3
+/tools/uirender
 *.o
 *.so
 *.a
+build/
+dist/
+
+# Release tarballs
+simple-login-gui-*.tar.gz
+simple-login-gui-*/
+
+# Local-only development documents and tooling. None of these reach a clone or a release
+# tarball, so no tracked file may name one -- the phase gate checks that over `git ls-files`.
+CLAUDE.md
+RULES.md
+PLAN.md
+SECURITY.md
+task.md
+.claude/
 
 # Editor backups
 *~

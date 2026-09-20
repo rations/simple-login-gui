@@ -1,0 +1,20 @@
+# Style for code WE author in this repo (src/, tools/). Matches the sibling CPU-Power and
+# rations-pedals projects, so the gfx/ and platform/ files ported from them stay directly
+# diffable: 4-space indentation, Linux braces (function brace on its own line, control braces
+# attached), no tabs.
+#
+# NEVER run clang-format over imported upstream trees or over resources/ — neither is ours to
+# reformat.
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Linux
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+SortIncludes: false
+IndentCaseLabels: true
+AccessModifierOffset: -4
