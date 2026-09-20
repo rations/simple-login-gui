@@ -1,4 +1,22 @@
 #!/bin/bash
+# simple-login-gui installer.
+#
+# ONE FILE, TWO MODES, and it detects which it is in:
+#
+#   BINARY  -- a usr/ tree sits next to this script, because it was unpacked from a release
+#              archive. Nothing is compiled; the tree is copied.
+#   SOURCE  -- a Makefile sits next to it, because this is a clone or a source checkout.
+#              Build dependencies are installed and it is built first.
+#
+# It is one file rather than two so that the installer shipped in the archive is the same
+# installer that gets run during development. A separate "real" installer that only ever runs
+# on someone else's machine is one nobody has tested.
+#
+# THE ORDER HERE IS A SAFETY PROPERTY, NOT A STYLE. /etc/inittab is edited LAST, and only after
+# the binary has been proved to start on this machine. Getting that backwards means a machine
+# whose tty1 getty has been replaced by a program that cannot run -- no login screen, no text
+# console, nothing to read the error on. That is the one mistake this script must not make.
+
 set -e
 
 if [ "$(id -u)" != "0" ]; then
@@ -6,7 +24,29 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+SELF_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$SELF_DIR"
+
+PREFIX=/usr/local
+BGDIR="$PREFIX/share/xlogin/backgrounds"
+
 echo "=== simple-login-gui installer ==="
+echo
+
+# ── Which mode ────────────────────────────────────────────────────────────────
+if [ -x "$SELF_DIR/usr/bin/xlogin" ] || [ -x "$SELF_DIR/usr/local/bin/xlogin" ]; then
+    MODE=binary
+    [ -x "$SELF_DIR/usr/local/bin/xlogin" ] && STAGED_BIN="$SELF_DIR/usr/local/bin/xlogin"
+    [ -x "$SELF_DIR/usr/bin/xlogin" ]       && STAGED_BIN="$SELF_DIR/usr/bin/xlogin"
+    echo "Installing from a prebuilt release archive."
+elif [ -f "$SELF_DIR/Makefile" ] && [ -f "$SELF_DIR/src/main.cpp" ]; then
+    MODE=source
+    echo "Installing from source."
+else
+    echo "ERROR: this script is not next to a usr/ tree or a source tree." >&2
+    echo "       Run it from inside the unpacked release archive, or from a checkout." >&2
+    exit 1
+fi
 echo
 
 # ── X server selection ───────────────────────────────────────────────────────
@@ -118,7 +158,7 @@ XSERVER_FLAGS="$XSERVER_FLAGS"
 # The VT the Options > Console entry switches to. There must be a getty on it.
 XLOGIN_CONSOLE_VT='$CONSOLE_VT'
 
-# Background image: a filename inside /usr/local/share/xlogin/backgrounds, or
+# Background image: a filename inside $BGDIR, or
 # empty for none. Set from the Options menu, or here.
 XLOGIN_BACKGROUND='$OLD_BACKGROUND'
 
@@ -136,25 +176,61 @@ apt-get install -y libcairo2 libfreetype6 libjpeg62-turbo libx11-6 libxrandr2 \
 echo "  done."
 echo
 
-# ── Build ─────────────────────────────────────────────────────────────────────
-# Always from source. There is no prebuilt binary any more: there used to be two,
-# one per GTK version, and shipping a compiled root-privileged login manager in a
-# tarball was never a good idea for the convenience it bought.
-echo "Installing build dependencies..."
-apt-get install -y libcairo2-dev libfreetype-dev libjpeg-dev libx11-dev \
-                   libxrandr-dev libpam0g-dev build-essential g++ make
-echo "Building..."
-make
-echo "  build complete."
+# ── Build (source mode only) ─────────────────────────────────────────────────
+if [ "$MODE" = source ]; then
+    echo "Installing build dependencies..."
+    apt-get install -y libcairo2-dev libfreetype-dev libjpeg-dev libx11-dev \
+                       libxrandr-dev libpam0g-dev build-essential g++ make
+    echo "Building..."
+    make
+    echo "  build complete."
+    echo
+    STAGED_BIN="$SELF_DIR/xlogin"
+fi
+
+# ── PROVE THE BINARY RUNS, BEFORE ANYTHING IRREVERSIBLE ──────────────────────
+# This is the check only the recipient's machine can make, and it is why the runtime
+# dependencies went in above this line and /etc/inittab is edited below it.
+#
+# A release binary carries the glibc symbol versions of the machine that built it. On an
+# older distribution the loader fails with a message about a symbol version, and if that
+# happens AFTER inittab has been changed there is no login screen and no getty on tty1 to
+# read the message on. So: run it here, and refuse to go on if it will not start.
+echo "Checking the binary runs on this machine..."
+if ! VERSION_OUT=$("$STAGED_BIN" --version 2>&1); then
+    echo >&2
+    echo "ERROR: $STAGED_BIN will not start on this machine:" >&2
+    echo "  $VERSION_OUT" >&2
+    echo >&2
+    if printf '%s' "$VERSION_OUT" | grep -q 'GLIBC'; then
+        echo "That is a glibc version error: this archive was built on a newer" >&2
+        echo "distribution than this one. Build from source instead --" >&2
+        echo "the source release installs the same way." >&2
+    fi
+    echo >&2
+    echo "NOTHING HAS BEEN CHANGED that stops this machine booting: /etc/inittab" >&2
+    echo "has not been touched and the tty1 getty is still in place." >&2
+    exit 1
+fi
+echo "  $VERSION_OUT"
 echo
 
-# ── Install binaries and config ───────────────────────────────────────────────
+# ── Install the files ─────────────────────────────────────────────────────────
 echo "Installing binaries, fonts and config..."
-# `make install` puts every file where it goes -- binary, launcher, PAM stack, init
-# script, polkit rules, the two bundled fonts and the backgrounds directory -- and
-# deliberately touches nothing else. Everything below this line is the part that is
-# a decision about this machine.
-make install
+if [ "$MODE" = binary ]; then
+    # The archive is an absolute tree. Copy it as-is: the paths inside the binary were
+    # compiled for exactly these locations, which is why the archive is not relocatable.
+    for TREE in usr etc; do
+        [ -d "$SELF_DIR/$TREE" ] || continue
+        cp -a --no-preserve=ownership "$SELF_DIR/$TREE/." "/$TREE/"
+    done
+    chown -R root:root "$PREFIX/share/xlogin" "$PREFIX/bin/xlogin" "$PREFIX/bin/xlogin-launcher"
+    chmod 755 "$PREFIX/bin/xlogin" "$PREFIX/bin/xlogin-launcher" /etc/init.d/xlogin-launcher
+else
+    # make install puts every file where it goes and deliberately touches nothing else.
+    make install
+fi
+install -d -m 755 "$BGDIR"
 echo "  done."
 echo
 
@@ -287,8 +363,6 @@ echo
 # world-writable, and it decides the format by the magic bytes, not the extension.
 # That is not paperwork: the decoder runs as root before anybody has authenticated,
 # so the only people who can hand it a file must already be root.
-BGDIR=/usr/local/share/xlogin/backgrounds
-
 echo "Background image for the login screen (optional)."
 echo "  PNG or JPEG. It is copied into $BGDIR"
 echo "  and owned by root -- you can add or change it later from the Options menu"
@@ -322,11 +396,14 @@ if [ -n "$BG_SRC" ]; then
 fi
 
 # ── Configure inittab ─────────────────────────────────────────────────────────
+# LAST, and deliberately so: everything above can be undone by re-running this script or
+# by deleting a file. This is the step that decides what happens at boot, and it is only
+# reached because the binary was proved to start further up.
 if ! grep -q xlogin-launcher /etc/inittab 2>/dev/null; then
     echo "Updating /etc/inittab..."
     cp /etc/inittab "/etc/inittab.backup.$(date +%Y%m%d_%H%M%S)"
     sed -i '/^1:[0-9]*:respawn:.*[ag]etty/s/^/#/' /etc/inittab
-    echo "1:2345:respawn:/usr/local/bin/xlogin-launcher" >> /etc/inittab
+    echo "1:2345:respawn:$PREFIX/bin/xlogin-launcher" >> /etc/inittab
     telinit q
     echo "  done."
 else
@@ -354,4 +431,4 @@ echo "    deliberate -- they can already hold the power button in -- but if this
 echo "    machine is somewhere the difference matters, see the Threat model"
 echo "    section of README.md before you rely on it."
 echo "  - To add more background images later:"
-echo "      sudo install -m 644 -o root -g root <image> /usr/local/share/xlogin/backgrounds/"
+echo "      sudo install -m 644 -o root -g root <image> $BGDIR/"

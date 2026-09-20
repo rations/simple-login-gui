@@ -539,8 +539,55 @@ private:
 } // namespace
 
 //------------------------------------------------------------------------
-int main()
+namespace
 {
+
+// --version and --help, and nothing else.
+//
+// These exist for the release gate as much as for people: a binary archive that has never had
+// its binary EXECUTED is an archive nobody has checked, and "does it start" is the one thing
+// that catches a loader error before the recipient finds it on tty1 with no way to read the
+// message. Argument handling in a root process is kept to exactly this -- two literal string
+// comparisons, before anything is opened, allocated or parsed.
+int handleArgs(int argc, char **argv)
+{
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--version") == 0) {
+            printf("xlogin %s\n", XLOGIN_VERSION);
+            return 0;
+        }
+        if (strcmp(argv[i], "--help") == 0) {
+            printf("xlogin %s -- a graphical login for Devuan on sysvinit and seatd.\n"
+                   "\n"
+                   "It takes no options. It is started by xlogin-launcher from /etc/inittab,\n"
+                   "on the tty the launcher is running on, against an X server the launcher\n"
+                   "has already started. Running it by hand from a terminal inside a session\n"
+                   "will not do anything useful.\n"
+                   "\n"
+                   "  --version   print the version and exit\n"
+                   "  --help      print this and exit\n"
+                   "\n"
+                   "Configuration: %s\n"
+                   "Fonts:         %s/fonts\n"
+                   "Backgrounds:   %s\n",
+                   XLOGIN_VERSION, config_path(), XLOGIN_RESOURCE_DIR_DEFAULT,
+                   XLOGIN_BACKGROUND_DIR);
+            return 0;
+        }
+        fprintf(stderr, "xlogin: unknown option '%s' (try --help)\n", argv[i]);
+        return 2;
+    }
+    return -1; // no option: carry on and be a login screen
+}
+
+} // namespace
+
+int main(int argc, char **argv)
+{
+    const int early = handleArgs(argc, argv);
+    if (early >= 0)
+        return early;
+
     // FIRST. Before a password can exist in this address space.
     if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0)
         fprintf(stderr, "xlogin: could not disable core dumps: %s\n", strerror(errno));

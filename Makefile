@@ -11,6 +11,14 @@
 CC      ?= gcc
 CXX     ?= g++
 
+# The version, and the prefix the paths below are COMPILED INTO the binary.
+#
+# The prefix is not a cosmetic default. XLOGIN_RESOURCE_DIR_DEFAULT, XLOGIN_BACKGROUND_DIR and
+# XLOGIN_CONFIG_PATH are baked in at compile time, so a binary is only correct at the prefix it
+# was built for -- which is why the release archive is an absolute tree unpacked at / rather
+# than something relocatable. Change it here and rebuild; do not move the files afterwards.
+VERSION     ?= 2.0.0
+
 PREFIX      ?= /usr/local
 BINDIR      ?= $(PREFIX)/bin
 SHAREDIR    ?= $(PREFIX)/share/xlogin
@@ -36,7 +44,8 @@ LDHARDEN = -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
 
 DEFS = -DXLOGIN_RESOURCE_DIR_DEFAULT=\"$(SHAREDIR)\" \
        -DXLOGIN_BACKGROUND_DIR=\"$(BGDIR)\" \
-       -DXLOGIN_CONFIG_PATH=\"$(SYSCONFDIR)/xlogin.conf\"
+       -DXLOGIN_CONFIG_PATH=\"$(SYSCONFDIR)/xlogin.conf\" \
+       -DXLOGIN_VERSION=\"$(VERSION)\"
 
 # -MMD -MP writes a .d file beside each .o listing the headers it included, so editing a
 # header rebuilds everything that includes it. Without this, `make` after a header-only edit

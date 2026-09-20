@@ -59,10 +59,29 @@ on the screen goes grey and that button does not.
 Runtime: `libcairo2 libfreetype6 libjpeg62-turbo libx11-6 libxrandr2 libpam0g seatd libseat1
 x11-xserver-utils xinit xterm`
 
-Build: `libcairo2-dev libfreetype-dev libjpeg-dev libx11-dev libxrandr-dev libpam0g-dev
-build-essential g++ make`
+Build, if you are building from source: `libcairo2-dev libfreetype-dev libjpeg-dev libx11-dev
+libxrandr-dev libpam0g-dev build-essential g++ make`
 
-The installer installs both sets for you.
+The installer installs whichever set it needs.
+
+### If you are using the binary release
+
+It is built for one architecture and against one glibc, and both are stated on the download.
+The current release needs:
+
+| | |
+|---|---|
+| architecture | `x86_64` |
+| glibc | **>= 2.38** |
+| libstdc++ | `GLIBCXX_3.4.29` |
+
+**glibc 2.38 means Excalibur or newer.** Devuan Daedalus and Debian bookworm ship 2.36, and the
+binary will not start on them — build from source there instead, which installs exactly the same
+way.
+
+You do not have to work this out in advance. `install.sh` **runs the binary before it changes
+anything**, and if it will not start it says so and stops with `/etc/inittab` untouched — so a
+mismatch costs you a message, not a machine that will not boot.
 
 ---
 
@@ -87,13 +106,23 @@ instant and why the Console entry can leave it alone.
 
 ## Installation
 
-Extract the release tarball and run the installer as root:
+Download the release archive and its checksum, check it, unpack it and run the installer:
 
 ```sh
-tar -xf simple-login-gui-2.0.0.tar.gz
-cd simple-login-gui-2.0.0
-sudo bash install.sh
+sha256sum -c xlogin-2.0.0-x86_64.sha256
+tar -xf xlogin-2.0.0-x86_64.tar.gz
+cd xlogin-2.0.0-x86_64
+sudo ./install.sh
 ```
+
+The archive holds the installed tree — the binary, the launcher, the PAM stack, the init script,
+the polkit rules and the fonts — plus `install.sh`, `uninstall.sh` and these documents. No
+sources and no build system; nothing is compiled on your machine.
+
+**The archive is not relocatable.** The binary has `/usr/local/...` compiled into it for its
+fonts, its backgrounds directory and its config, so it is an absolute tree that belongs at `/`.
+`install.sh` puts it there. Unpacking it somewhere else and running the binary from there gives
+you a login screen with no fonts.
 
 It asks:
 
@@ -120,11 +149,17 @@ Reboot to activate it.
 **Re-running the installer is safe.** It reads back your existing `XLOGIN_BACKGROUND`,
 `XLOGIN_BG_MODE` and `XLOGIN_CONSOLE_VT` before rewriting the config, and backs the old file up.
 
-### There is no prebuilt binary
+### Building from source instead
 
-Earlier versions shipped two compiled binaries in the tarball, one per GTK version. They are gone.
-Shipping a compiled, root-privileged login manager to be installed sight-unseen was never worth
-the build dependencies it saved.
+If the binary will not run on your distribution, or you would rather compile it yourself, clone
+the repository and run the same installer. It detects that there is no `usr/` tree next to it,
+installs the build dependencies and builds first:
+
+```sh
+sudo ./install.sh
+```
+
+Everything after the build is identical.
 
 ### Session detection
 
@@ -223,7 +258,7 @@ sudo telinit q
 ## Uninstall
 
 ```sh
-sudo bash uninstall.sh
+sudo ./uninstall.sh
 ```
 
 Removes the binary, the launcher, the PAM stack, the init script, the polkit rules and the bundled
@@ -429,8 +464,23 @@ The layout itself lives in one file, `src/geometry.h`, in logical units, with a 
 every clearance. One `cairo_scale` is applied when the frame is composed; no coordinate anywhere
 has a scale factor baked into it.
 
-`bash make-release.sh <version>` builds, runs the layout audit, checks that the assembled tarball
-itself compiles, and only then packs it.
+`sh make-release.sh <version>` cuts the binary release into `dist/`. It builds, runs the layout
+audit, and then asserts a list of things about the **archive** rather than about the code:
+
+- the installed tree is **exactly** a manifest written into the script — it fails on a file that
+  appears as well as one that goes missing, so an install rule added to the Makefile cannot reach
+  a release unnoticed
+- no file in it, **including the binary**, names a path from the build machine or a document the
+  recipient will not have. A text-only grep cannot see a path baked into an ELF
+- no symlinks, and every path fits ustar
+- the binary links only libraries on an allowlist, so a new dependency has to be decided rather
+  than discovered
+- PIE, full RELRO, BIND_NOW and NX on the **shipped** binary, not on a build
+- then it unpacks what it just wrote and checks *that*: the manifest again, that the binary
+  **runs**, that it reports the version being released rather than a stale build, and that its
+  compiled-in paths match where the archive puts its files
+
+It prints the minimum glibc and the exact library list to publish next to the download.
 
 ---
 
