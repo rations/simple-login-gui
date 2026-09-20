@@ -109,9 +109,9 @@ instant and why the Console entry can leave it alone.
 Download the release archive and its checksum, check it, unpack it and run the installer:
 
 ```sh
-sha256sum -c xlogin-2.0.0-x86_64.sha256
-tar -xf xlogin-2.0.0-x86_64.tar.gz
-cd xlogin-2.0.0-x86_64
+sha256sum -c simple-login-gui-1.0.4-x86_64.sha256
+tar -xf simple-login-gui-1.0.4-x86_64.tar.gz
+cd simple-login-gui-1.0.4-x86_64
 sudo ./install.sh
 ```
 

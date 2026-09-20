@@ -15,8 +15,8 @@
 #
 # HOW IT IS INSTALLED:
 #
-#     tar -xf xlogin-<version>-<arch>.tar.gz
-#     cd xlogin-<version>-<arch>
+#     tar -xf simple-login-gui-<version>-<arch>.tar.gz
+#     cd simple-login-gui-<version>-<arch>
 #     sudo ./install.sh
 #
 # install.sh is the same file that lives at the top of the source tree; it detects that a usr/
@@ -33,7 +33,11 @@
 #   * install.sh runs the binary and refuses to touch /etc/inittab if it will not start.
 # The archive is arch-specific and its name says so.
 #
-# ONE ARCHIVE: xlogin-<version>-<arch>.tar.gz, plus its checksum.
+# ONE ARCHIVE: simple-login-gui-<version>-<arch>.tar.gz, plus its checksum. The archive is
+# named for the PROJECT and the binary inside it is named xlogin; those are two different
+# names here and the archive takes the one people look for. Releases 1.0.x were
+# simple-login-gui-<version>.tar.gz and this continues that, with the architecture added
+# because a binary archive has one and a source tarball did not.
 #
 # WHY ustar. Written in the POSIX.1-1988 ustar format, which every tar reads -- bsdtar, busybox,
 # toybox, Python tarfile, 7-Zip. pax carries extended headers that smaller tars either ignore or
@@ -54,7 +58,7 @@ die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 say() { printf '  %s\n' "$*"; }
 
 VERSION="${1:-}"
-[ -n "$VERSION" ] || die "usage: sh make-release.sh <version>   e.g. sh make-release.sh 2.0.0"
+[ -n "$VERSION" ] || die "usage: sh make-release.sh <version>   e.g. sh make-release.sh 1.0.4"
 
 root=$(cd "$(dirname "$0")" && pwd)
 cd "$root"
@@ -65,7 +69,7 @@ done
 tar --version 2>/dev/null | head -1 | grep -q 'GNU tar' || die "this script needs GNU tar"
 
 arch=$(uname -m)
-name="xlogin-${VERSION}-${arch}"
+name="simple-login-gui-${VERSION}-${arch}"
 outdir="$root/dist"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT

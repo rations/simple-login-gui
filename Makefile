@@ -17,7 +17,7 @@ CXX     ?= g++
 # XLOGIN_CONFIG_PATH are baked in at compile time, so a binary is only correct at the prefix it
 # was built for -- which is why the release archive is an absolute tree unpacked at / rather
 # than something relocatable. Change it here and rebuild; do not move the files afterwards.
-VERSION     ?= 2.0.0
+VERSION     ?= 1.0.4
 
 PREFIX      ?= /usr/local
 BINDIR      ?= $(PREFIX)/bin
