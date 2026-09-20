@@ -1,192 +1,207 @@
-// uirender -- compose the drawing layer to a PNG with no X server running.
+// uirender -- render and MEASURE the real login screen, with no X server running.
 //
-// This is the cheap half of the test strategy and the reason src/gfx/ is kept free of Xlib: a
-// login screen can otherwise only be looked at by rebooting into it, which is a slow way to
-// find out that a label is clipped. Everything here uses the same Canvas, the same FontStack
-// and the same palette the real window uses, so what it renders is what the screen renders.
+// This is the cheap half of the test strategy and the reason src/gfx/ and src/ui/ are kept
+// free of Xlib. The alternative way to find out that the status line is clipped is to install
+// this program on tty1 and reboot into it, and the string most likely to be clipped is the one
+// that tells a user why they cannot log in.
 //
-// Usage:  tools/uirender <resource-dir> <out.png> [background-dir] [background-name] [mode]
+// It renders the SAME Panel class the window renders, through the same Canvas, with the same
+// bundled faces, at the same scales X11Window::autoScale picks on real hardware. Nothing here
+// is a mock-up of the login screen; it is the login screen, composed to a file.
 //
-// Exits non-zero if the bundled fonts did not load. That is deliberate: measuring text against
-// a substituted system face proves nothing about whether it fits on the real machine.
+// Two kinds of check, and the second is the one that fails builds:
+//
+//   * MEASUREMENT. Every string that has a slot is measured against that slot at its real
+//     size in its real face, with worst-case content -- the longest PAM error, a username at
+//     the length the old implementation accepted, a full password. An overflow is a failure
+//     even though Canvas::clipToWidth would have drawn an ellipsis, because an ellipsis in
+//     the middle of "Your account has expired" is a login screen that has stopped explaining
+//     itself.
+//   * INK CLEARANCE. geometry.h asserts its clearances at compile time against the font's
+//     nominal box. Here they are re-checked against cairo's actual ink extents for the actual
+//     strings, which is the number that decides whether two rows really touch.
+//
+// Usage:  tools/uirender <resource-dir> <out-dir> [background-dir] [background-name] [mode]
 
+#include "geometry.h"
 #include "gfx/canvas.h"
 #include "gfx/fontstack.h"
 #include "gfx/image.h"
 #include "gfx/ink.h"
+#include "gfx/keys.h"
 #include "gfx/palette.h"
+#include "ui/panel.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 using namespace xlogin;
 
 namespace
 {
 
-// The worst-case strings this layer has to survive. Real PAM messages, a username at the limit
-// the old GTK code enforced, and the longest status text the UI can produce.
-const char *const kWorstCase[] = {
+int gFailures = 0;
+
+void failure(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void failure(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    fprintf(stderr, "uirender: FAIL ");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    va_end(ap);
+    ++gFailures;
+}
+
+// The worst case each slot has to survive. Real strings, not lorem ipsum: the PAM messages are
+// what pam_strerror actually returns, and the username is the length the GTK implementation
+// accepted without complaint.
+const char *const kStatusWorstCase[] = {
     "Authentication failure",
     "Your account has expired; please contact your system administrator",
-    "aVeryLongUserNameThatSomebodyWillHaveSoonerOrLater",
     "Permission denied",
+    "Authentication token is no longer valid; new one required",
+    "Enter a username and password",
+    "Failed to create runtime dir",
+    "User not found",
     "Starting session...",
 };
 
-struct Swatch {
-    const char *name;
-    uint32_t rgb;
+const char *const kUsernameWorstCase[] = {
+    "aVeryLongUserNameThatSomebodyWillHaveSoonerOrLater",
+    "jean-françois",
+    "user",
 };
 
-const Swatch kSwatches[] = {
-    {"kBgColor", pal::kBgColor},
-    {"kFaceColor", pal::kFaceColor},
-    {"kWellColor", pal::kWellColor},
-    {"kGold", pal::kGold},
-    {"kTextColor", pal::kTextColor},
-    {"kDimColor", pal::kDimColor},
-    {"kAccent", pal::kAccent},
-    {"kAccentBright", pal::kAccentBright},
-    {"kDisabledColor", pal::kDisabledColor},
-    {"kWarnColor", pal::kWarnColor},
-    {"kErrorColor", pal::kErrorColor},
-};
-
-int gOverflows = 0;
-
-// Draw a string and complain if it did not fit the slot it was given. This is the check that
-// makes the tool an audit rather than a screenshot.
-void drawChecked(Canvas &c, const char *text, float x, float y, float maxW)
+//------------------------------------------------------------------------
+// Measure one string against one slot, at a given face and size.
+void checkFits(Canvas &c, Font face, float size, const char *what, const std::string &s,
+               float slotW)
 {
-    const float w = c.stringWidth(text);
-    if (w > maxW) {
-        fprintf(stderr, "uirender: OVERFLOW %.1f > %.1f for \"%s\"\n", static_cast<double>(w),
-                static_cast<double>(maxW), text);
-        ++gOverflows;
+    c.setFont(face);
+    c.setFontSize(size);
+    const float w = c.stringWidth(s.c_str());
+    if (w > slotW) {
+        failure("%s overflows its slot: %.1f > %.1f for \"%s\"", what, static_cast<double>(w),
+                static_cast<double>(slotW), s.c_str());
     }
-    c.drawString(c.clipToWidth(text, maxW).c_str(), x, y);
 }
 
-} // namespace
-
-int main(int argc, char **argv)
+// Re-check a clearance against real ink rather than the nominal font box geometry.h asserts
+// with. `upper` is drawn at baseline `upperBase`, `lower` at `lowerBase`, and their ink must
+// not meet.
+void checkClearance(Canvas &c, Font face, float upperSize, const char *upper, float upperBase,
+                    float lowerSize, const char *lower, float lowerBase, const char *what)
 {
-    if (argc < 3) {
-        fprintf(stderr,
-                "usage: %s <resource-dir> <out.png> [bg-dir] [bg-name] [fill|fit|center|"
-                "stretch|tile]\n",
-                argv[0]);
-        return 2;
+    c.setFont(face);
+    c.setFontSize(upperSize);
+    const float bottom = upperBase + c.stringDescent(upper);
+    c.setFontSize(lowerSize);
+    const float top = lowerBase - c.stringAscent(lower);
+    if (bottom >= top) {
+        failure("%s: ink overlaps by %.2f units (\"%s\" ends at %.2f, \"%s\" starts at %.2f)", what,
+                static_cast<double>(bottom - top), upper, static_cast<double>(bottom), lower,
+                static_cast<double>(top));
     }
+}
 
-    const std::string resourceDir = argv[1];
-    const std::string outPath = argv[2];
+//------------------------------------------------------------------------
+// Drive the panel's key handler with a string, exactly as the window would after the input
+// method had composed it. This is what proves the field's UTF-8 handling on real text rather
+// than on the ASCII a test would otherwise reach for.
+void typeInto(Panel &p, const char *utf8)
+{
+    for (const char *q = utf8; *q;) {
+        // One whole UTF-8 sequence per call, the way Xutf8LookupString delivers it.
+        int len = 1;
+        while (q[len] && (static_cast<unsigned char>(q[len]) & 0xC0) == 0x80)
+            ++len;
+        p.key(Key::Plain, q, len);
+        q += len;
+    }
+}
 
-    FontStack fonts;
-    const bool bundled = fonts.load(resourceDir);
+//------------------------------------------------------------------------
+struct Scene {
+    const char *name;
+    const char *user;
+    const char *password;
+    const char *status;
+    bool statusIsError;
+    bool enabled;
+    bool passwordFocused;
+};
 
-    const int w = 900;
-    const int h = 560;
-    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+const Scene kScenes[] = {
+    {"empty", "", "", "", false, true, false},
+    {"typing", "human", "hunter2", "", false, true, true},
+    {"rejected", "aVeryLongUserNameThatSomebodyWillHaveSoonerOrLater", "",
+     "Your account has expired; please contact your system administrator", true, true, false},
+    {"busy", "human", "correct horse battery staple", "Authenticating...", false, false, true},
+    {"accents", "jean-françois", "pässwörd-with-ümläuts", "", false, true, true},
+};
+
+//------------------------------------------------------------------------
+bool renderScene(const FontStack &fonts, const Scene &sc, float scale, int screenW, int screenH,
+                 cairo_surface_t *background, BgMode bgMode, const std::string &outPath)
+{
+    const int pw = static_cast<int>(static_cast<float>(screenW) * scale);
+    const int ph = static_cast<int>(static_cast<float>(screenH) * scale);
+
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph);
     if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-        fprintf(stderr, "uirender: could not create the surface\n");
-        return 1;
+        cairo_surface_destroy(surface);
+        failure("could not create a %dx%d surface", pw, ph);
+        return false;
     }
+
     cairo_t *cr = cairo_create(surface);
+    // The ONE scale, applied exactly where X11Window::paint applies it.
+    cairo_scale(cr, scale, scale);
 
     {
-        Canvas c(cr, &fonts, static_cast<float>(w), static_cast<float>(h));
+        Canvas c(cr, &fonts, static_cast<float>(screenW), static_cast<float>(screenH));
 
-        // Ground.
-        c.setColor(pal::kBgColor);
-        c.fillRect(c.bounds());
+        Panel panel;
+        const Rect screen(0, 0, static_cast<float>(screenW), static_cast<float>(screenH));
+        panel.layout(screen, screen);
+        panel.setHostname("devuan-excalibur.local");
+        panel.setBackground(background, bgMode);
+        panel.reset();
 
-        // Optional background image, exercised through exactly the path the window uses.
-        if (argc >= 5) {
-            const BgMode mode = argc >= 6 ? bgModeFromString(argv[5]) : BgMode::Fill;
-            cairo_surface_t *bg = loadBackgroundImage(argv[3], argv[4]);
-            if (bg) {
-                drawBackground(c, bg, c.bounds(), mode);
-                cairo_surface_destroy(bg);
-                printf("uirender: background '%s' drawn as %s\n", argv[4], bgModeName(mode));
-            } else {
-                printf("uirender: background '%s' refused, flat ground kept\n", argv[4]);
-            }
+        typeInto(panel, sc.user);
+        if (sc.passwordFocused || sc.password[0]) {
+            panel.key(Key::Tab, "", 0);
+            typeInto(panel, sc.password);
+        }
+        if (sc.status[0])
+            panel.setStatus(sc.status, sc.statusIsError);
+        panel.setEnabled(sc.enabled);
+
+        panel.draw(c);
+
+        // The field contents must be what was typed, byte for byte. A field that silently
+        // dropped the second byte of an e-acute would still LOOK right in the PNG.
+        if (strcmp(panel.username().text(), sc.user) != 0) {
+            failure("scene %s: username round-tripped as \"%s\", not \"%s\"", sc.name,
+                    panel.username().text(), sc.user);
+        }
+        if (sc.password[0] && strcmp(panel.password().text(), sc.password) != 0) {
+            failure("scene %s: password did not round-trip", sc.name);
         }
 
-        // Title face.
-        c.setFont(Font::Title);
-        c.setFontSize(22.0f);
-        c.setColor(pal::kTextColor);
-        drawChecked(c, "XLOGIN", 24.0f, 48.0f, 300.0f);
-
-        c.setColor(pal::kGold, 90);
-        c.setPenSize(1.0f);
-        c.strokeLine(24.0f, 62.0f, static_cast<float>(w) - 24.0f, 62.0f);
-
-        // Body face at every size the panel will use, with the worst-case strings.
+        // A full field must SCROLL, not overrun. contentWidth is what the field will draw.
+        const float slotW = geo::kFieldW - 2.0f * geo::kFieldPadX;
         c.setFont(Font::Body);
-        float y = 92.0f;
-        for (float size : {9.0f, 10.0f, 11.0f, 12.0f, 15.0f}) {
-            c.setFontSize(size);
-            c.setColor(pal::kDimColor);
-            char label[32];
-            snprintf(label, sizeof(label), "%.0fpx", static_cast<double>(size));
-            c.drawString(label, 24.0f, y);
-            c.setColor(pal::kTextColor);
-            drawChecked(c, kWorstCase[1], 70.0f, y, static_cast<float>(w) - 94.0f);
-            y += size + 12.0f;
-        }
-
-        // Every worst-case string at the size the status line will use.
-        c.setFontSize(11.0f);
-        y += 10.0f;
-        for (const char *s : kWorstCase) {
-            c.setColor(pal::kErrorColor);
-            drawChecked(c, s, 24.0f, y, static_cast<float>(w) - 48.0f);
-            y += 18.0f;
-        }
-
-        // The palette, and the ink rule, drawn the way a control draws them.
-        y += 16.0f;
-        float x = 24.0f;
-        for (const Swatch &s : kSwatches) {
-            const Rect box(x, y, 64.0f, 28.0f);
-            c.setColor(s.rgb);
-            c.fillRoundRect(box, 3.0f);
-            c.setColor(pal::kDimColor, kOutlineAlphaIdle);
-            c.setPenSize(1.0f);
-            c.strokeRoundRect(box, 3.0f);
-            x += 72.0f;
-            if (x + 64.0f > static_cast<float>(w) - 24.0f) {
-                x = 24.0f;
-                y += 36.0f;
-            }
-        }
-
-        // inkFor(), all three states, in the idiom from ink.h.
-        y += 48.0f;
-        const char *const states[] = {"disabled", "off", "on"};
-        const bool enabled[] = {false, true, true};
-        const bool on[] = {false, false, true};
-        x = 24.0f;
-        for (int i = 0; i < 3; ++i) {
-            const Rect box(x, y, 120.0f, 30.0f);
-            c.setColor(pal::kWellColor);
-            c.fillRoundRect(box, 3.0f);
-            if (enabled[i] && on[i]) {
-                c.setColor(pal::kAccent, kOnFillAlpha);
-                c.fillRoundRect(box, 3.0f);
-            }
-            c.setColor(inkFor(enabled[i], on[i]), i == 2 ? kOutlineAlphaHover : kOutlineAlphaIdle);
-            c.setPenSize(1.0f);
-            c.strokeRoundRect(box, 3.0f);
-            c.setFontSize(11.0f);
-            c.setColor(enabled[i] ? pal::kTextColor : pal::kDisabledColor);
-            c.drawString(states[i], box.x + 10.0f, box.centerY() + 11.0f * 0.36f);
-            x += 132.0f;
+        c.setFontSize(geo::kFieldTextSize);
+        const float userW = panel.username().contentWidth(c);
+        if (userW > slotW) {
+            printf("uirender: note - username \"%s\" is %.1f wide in a %.1f slot; it scrolls\n",
+                   sc.user, static_cast<double>(userW), static_cast<double>(slotW));
         }
     }
 
@@ -195,21 +210,178 @@ int main(int argc, char **argv)
     cairo_surface_destroy(surface);
 
     if (st != CAIRO_STATUS_SUCCESS) {
-        fprintf(stderr, "uirender: could not write %s: %s\n", outPath.c_str(),
-                cairo_status_to_string(st));
-        return 1;
+        failure("could not write %s: %s", outPath.c_str(), cairo_status_to_string(st));
+        return false;
+    }
+    return true;
+}
+
+//------------------------------------------------------------------------
+// Everything that has a slot, measured against it.
+void auditLayout(const FontStack &fonts)
+{
+    cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t *cr = cairo_create(s);
+    Canvas c(cr, &fonts, 8.0f, 8.0f);
+
+    const float inner = geo::kPanelW - 2.0f * geo::kMargin;
+
+    checkFits(c, Font::Title, geo::kTitleSize, "the title", "LOGIN", inner);
+    checkFits(c, Font::Body, geo::kLabelSize, "the username label", "Username", inner);
+    checkFits(c, Font::Body, geo::kLabelSize, "the password label", "Password", inner);
+    checkFits(c, Font::Body, geo::kHostSize, "the hostname line", "devuan-excalibur.local", inner);
+
+    for (const char *s2 : kStatusWorstCase)
+        checkFits(c, Font::Body, geo::kStatusSize, "a status message", s2, geo::kStatusW);
+
+    // Button labels, against the label slot rather than the whole button: the padding either
+    // side is what stops a label touching the outline.
+    checkFits(c, Font::Body, geo::kButtonTextSize, "the Log in button label", "Log in",
+              geo::kLoginW - 2.0f * geo::kFieldPadX);
+    checkFits(c, Font::Body, geo::kButtonTextSize, "the Options button label", "Options",
+              geo::kOptionsW - 2.0f * geo::kFieldPadX);
+
+    // Placeholders, which are drawn in the field's own slot.
+    const float fieldSlot = geo::kFieldW - 2.0f * geo::kFieldPadX;
+    checkFits(c, Font::Body, geo::kFieldTextSize, "the username placeholder", "username",
+              fieldSlot);
+    checkFits(c, Font::Body, geo::kFieldTextSize, "the password placeholder", "password",
+              fieldSlot);
+
+    // How many masked characters fit before the password field starts scrolling. Not a
+    // failure -- scrolling is correct behaviour -- but a number worth printing, because if it
+    // were small it would mean the dots were too far apart.
+    const int dotsThatFit = static_cast<int>(fieldSlot / geo::kDotPitch);
+    printf("uirender: %d password dots fit before the field scrolls\n", dotsThatFit);
+    if (dotsThatFit < 20)
+        failure("only %d password dots fit; the dot pitch is too wide", dotsThatFit);
+
+    // The clearances geometry.h asserts nominally, re-checked against real ink. Descenders are
+    // the whole point, so each pair uses strings that actually have them.
+    checkClearance(c, Font::Body, geo::kHostSize, "devuan-gp.local", geo::kHostBaselineY,
+                   geo::kLabelSize, "Username", geo::kUserLabelBaselineY,
+                   "hostname vs username label");
+    checkClearance(c, Font::Body, geo::kLabelSize, "Password", geo::kPassLabelBaselineY,
+                   geo::kFieldTextSize, "pässwörd", geo::fieldTextBaseline(geo::kPassFieldY),
+                   "password label vs its field text");
+    checkClearance(c, Font::Body, geo::kFieldTextSize, "jean-françois",
+                   geo::fieldTextBaseline(geo::kUserFieldY), geo::kLabelSize, "Password",
+                   geo::kPassLabelBaselineY, "username field text vs password label");
+    checkClearance(c, Font::Body, geo::kStatusSize,
+                   "Your account has expired; please contact your system administrator",
+                   geo::kStatusBaselineY, geo::kButtonTextSize, "Log in",
+                   geo::kButtonY + geo::kButtonH * 0.5f +
+                       geo::kButtonTextSize * geo::kLabelBaselineBias,
+                   "status line vs button row");
+
+    // Field text must sit inside its own well, measured rather than assumed. A descender
+    // clipped by the bottom of a password field is the kind of thing nobody notices until a
+    // user with a 'g' in their name reports it.
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kFieldTextSize);
+    const float base = geo::fieldTextBaseline(geo::kUserFieldY);
+    const float inkTop = base - c.stringAscent("Jjfl");
+    const float inkBottom = base + c.stringDescent("gypq");
+    if (inkTop < geo::kUserFieldY)
+        failure("field text ascends %.2f units above its well", geo::kUserFieldY - inkTop);
+    if (inkBottom > geo::kUserFieldY + geo::kFieldH) {
+        failure("field text descends %.2f units below its well",
+                inkBottom - (geo::kUserFieldY + geo::kFieldH));
     }
 
-    printf("uirender: wrote %s\n", outPath.c_str());
+    // Every worst-case username, against the field slot. These are allowed to scroll, so this
+    // reports rather than fails -- but silence here would mean the longest one somehow fits,
+    // which would be worth knowing too.
+    for (const char *u : kUsernameWorstCase) {
+        c.setFontSize(geo::kFieldTextSize);
+        const float w = c.stringWidth(u);
+        printf("uirender: username \"%s\" is %.1f units in a %.1f slot (%s)\n", u,
+               static_cast<double>(w), static_cast<double>(fieldSlot),
+               w > fieldSlot ? "scrolls" : "fits");
+    }
+
+    cairo_destroy(cr);
+    cairo_surface_destroy(s);
+}
+
+} // namespace
+
+//------------------------------------------------------------------------
+int main(int argc, char **argv)
+{
+    if (argc < 3) {
+        fprintf(stderr,
+                "usage: %s <resource-dir> <out-dir> [bg-dir] [bg-name] "
+                "[fill|fit|center|stretch|tile]\n",
+                argv[0]);
+        return 2;
+    }
+
+    const std::string resourceDir = argv[1];
+    const std::string outDir = argv[2];
+
+    FontStack fonts;
+    const bool bundled = fonts.load(resourceDir);
     if (!bundled) {
+        // Fatal, and deliberately so: measuring text against a substituted system face proves
+        // nothing at all about whether it fits on the machine this will be installed on.
         fprintf(stderr, "uirender: FAILED - the bundled fonts did not load, so nothing measured "
                         "here says anything about the real machine\n");
         return 1;
     }
-    if (gOverflows > 0) {
-        fprintf(stderr, "uirender: FAILED - %d string(s) overflowed their slot\n", gOverflows);
+
+    cairo_surface_t *background = nullptr;
+    BgMode bgMode = BgMode::Fill;
+    if (argc >= 5) {
+        bgMode = argc >= 6 ? bgModeFromString(argv[5]) : BgMode::Fill;
+        background = loadBackgroundImage(argv[3], argv[4]);
+        printf("uirender: background '%s' %s\n", argv[4],
+               background ? "loaded" : "refused, flat ground kept");
+    }
+
+    auditLayout(fonts);
+
+    // The scales a real machine picks, taken from the window's own rule rather than made up
+    // here: 768p, 1080p and 4K. Rendering at each one is what catches a constant that only
+    // happens to work at scale 1.
+    struct Res {
+        int w, h;
+        float scale;
+    };
+    // Mirrors X11Window::autoScale, which gfx/ cannot call without linking X11.
+    auto autoScale = [](int pixelH) {
+        float s = static_cast<float>(pixelH) / 768.0f;
+        if (s < 1.0f)
+            s = 1.0f;
+        if (s > 3.0f)
+            s = 3.0f;
+        return static_cast<float>(static_cast<int>(s * 4.0f + 0.5f)) / 4.0f;
+    };
+    const Res resolutions[] = {
+        {1366, 768, autoScale(768)},
+        {1920, 1080, autoScale(1080)},
+        {3840, 2160, autoScale(2160)},
+    };
+
+    for (const Res &res : resolutions) {
+        for (const Scene &sc : kScenes) {
+            char path[512];
+            snprintf(path, sizeof(path), "%s/panel-%dp-%s.png", outDir.c_str(), res.h, sc.name);
+            const int logicalW = static_cast<int>(static_cast<float>(res.w) / res.scale);
+            const int logicalH = static_cast<int>(static_cast<float>(res.h) / res.scale);
+            if (renderScene(fonts, sc, res.scale, logicalW, logicalH, background, bgMode, path))
+                printf("uirender: wrote %s (%dx%d at scale %.2f)\n", path, res.w, res.h,
+                       static_cast<double>(res.scale));
+        }
+    }
+
+    if (background)
+        cairo_surface_destroy(background);
+
+    if (gFailures > 0) {
+        fprintf(stderr, "uirender: FAILED - %d layout problem(s)\n", gFailures);
         return 1;
     }
-    printf("uirender: PASSED - fonts bundled, no overflow\n");
+    printf("uirender: PASSED - fonts bundled, every slot fits, every clearance holds\n");
     return 0;
 }

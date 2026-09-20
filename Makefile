@@ -41,21 +41,38 @@ COMMON   = $(WARN) $(HARDEN) $(DEFS) -Isrc
 CFLAGS   += -std=c11   $(COMMON)
 CXXFLAGS += -std=c++17 $(COMMON)
 
+PAM_LIBS = -lpam
+
 # --- objects ------------------------------------------------------------------------------
-GFX_OBJS = src/gfx/canvas.o src/gfx/fontstack.o src/gfx/image.o
+# GFX_OBJS is everything tools/uirender can link: cairo only, no X11. ui/panel.o is in here
+# deliberately -- the entire visible surface of the login screen is auditable headlessly
+# because of it, and an #include of Xlib.h under src/gfx/ or src/ui/ would silently cost that.
+GFX_OBJS = src/gfx/canvas.o src/gfx/fontstack.o src/gfx/image.o src/gfx/textfield.o \
+           src/gfx/widgets.o src/ui/panel.o
 PLAT_OBJS = src/platform/xerror.o src/platform/respath.o src/platform/x11window.o
+SESSION_OBJS = src/session/auth.o src/session/launch.o src/session/cleanup.o
+MAIN_OBJS = src/main.o
 
 .PHONY: all clean install uninstall gfx tools
 
-# Phase 1 builds and audits the drawing layer. The xlogin binary arrives with main.cpp.
-all: tools
+all: xlogin tools
 
 gfx: $(GFX_OBJS)
 tools: tools/uirender
 
+# Linked with g++: the C++ half needs the runtime, and the C half does not care.
+xlogin: $(MAIN_OBJS) $(GFX_OBJS) $(PLAT_OBJS) $(SESSION_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(GFX_LIBS) $(X11_LIBS) $(PAM_LIBS) $(LDHARDEN)
+
 # gfx objects: cairo only, no X11 in the include path at all.
 src/gfx/%.o: src/gfx/%.cpp
 	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) -c -o $@ $<
+
+src/ui/%.o: src/ui/%.cpp
+	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) -c -o $@ $<
+
+src/main.o: src/main.cpp
+	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) $(X11_CFLAGS) -c -o $@ $<
 
 src/platform/%.o: src/platform/%.cpp
 	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) $(X11_CFLAGS) -c -o $@ $<
@@ -70,10 +87,10 @@ tools/%.o: tools/%.cpp
 	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(GFX_OBJS) $(PLAT_OBJS) tools/*.o tools/uirender xlogin
+	rm -f $(GFX_OBJS) $(PLAT_OBJS) $(SESSION_OBJS) $(MAIN_OBJS) tools/*.o tools/uirender xlogin
 
 install:
-	@echo "install: not wired up until the xlogin binary exists"; exit 1
+	@echo "install: lands with the packaging phase"; exit 1
 
 uninstall:
 	rm -f $(BINDIR)/xlogin $(BINDIR)/xlogin-launcher

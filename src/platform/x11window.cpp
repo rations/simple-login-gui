@@ -53,6 +53,31 @@ X11Window::~X11Window()
 }
 
 //------------------------------------------------------------------------
+// The scale, when the caller does not pick one.
+//
+// A fixed 420x300 logical panel drawn at scale 1 is a reasonable dialog on a 1366x768 laptop
+// and a postage stamp on a 4K monitor, and this program cannot ask: it draws before there is a
+// user to have a preference. So the unit is tied to the screen height, which is the dimension
+// a panel's readability actually follows -- 768 is the reference, and the range is clamped so
+// that neither a very short screen shrinks the text below legibility nor a very tall one fills
+// the screen with a login box.
+//
+// Quantised to quarter steps rather than left continuous, so that two machines of similar
+// height render identically and a screenshot from one is worth comparing with the other.
+float X11Window::autoScale(int pixelH)
+{
+    if (pixelH <= 0)
+        return 1.0f;
+
+    float s = static_cast<float>(pixelH) / 768.0f;
+    if (s < 1.0f)
+        s = 1.0f;
+    if (s > 3.0f)
+        s = 3.0f;
+    return static_cast<float>(static_cast<int>(s * 4.0f + 0.5f)) / 4.0f;
+}
+
+//------------------------------------------------------------------------
 bool X11Window::open(const std::string &title, float scale, int tickMs)
 {
     mScale = scale > 0.0f ? scale : 1.0f;
@@ -71,6 +96,10 @@ bool X11Window::open(const std::string &title, float scale, int tickMs)
     const int screen = DefaultScreen(mDpy);
     mPixelW = DisplayWidth(mDpy, screen);
     mPixelH = DisplayHeight(mDpy, screen);
+    // Deferred until the screen size is known, which is why `scale <= 0` is a request rather
+    // than something the caller could have computed itself.
+    if (scale <= 0.0f)
+        mScale = autoScale(mPixelH);
     mLogicalW = static_cast<float>(mPixelW) / mScale;
     mLogicalH = static_cast<float>(mPixelH) / mScale;
 
@@ -240,6 +269,32 @@ void X11Window::takeFocus()
     if (mXic)
         XSetICFocus(mXic);
     XFlush(mDpy);
+}
+
+//------------------------------------------------------------------------
+// While a session runs this window must get out of the way. It is override-redirect and
+// covers the screen, so leaving it mapped would put a login panel on top of the desktop; and
+// there is no window manager to lower it for us, so lowering rather than unmapping would still
+// leave it taking the pointer and the keyboard.
+void X11Window::hide()
+{
+    if (!mDpy || !mWin)
+        return;
+    ungrabKeyboard();
+    XUnmapWindow(mDpy, mWin);
+    XFlush(mDpy);
+}
+
+void X11Window::show()
+{
+    if (!mDpy || !mWin)
+        return;
+    XMapRaised(mDpy, mWin);
+    // The map is asynchronous and takeFocus() refuses to focus a window that is not yet
+    // viewable, so the round trip is needed before it, not after.
+    XSync(mDpy, False);
+    takeFocus();
+    mDirty = true;
 }
 
 //------------------------------------------------------------------------

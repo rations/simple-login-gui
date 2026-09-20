@@ -83,8 +83,22 @@ public:
     };
 
     // Opens the display, covers the screen, loads the fonts. Returns false having already
-    // warned. `scale` maps logical units to pixels; `tickMs` is the idle tick period.
+    // warned. `tickMs` is the idle tick period.
+    //
+    // `scale` maps logical units to pixels. Pass 0 to have it chosen from the screen height --
+    // which is what the login screen does, because it is the one program here that cannot ask
+    // anybody what they want: it draws before there is a user, a profile or a settings file.
+    // See autoScale().
     bool open(const std::string &title, float scale, int tickMs);
+
+    // The scale chosen for a screen `pixelH` pixels tall. Exposed so the layout audit can
+    // render at the same sizes a real machine will use.
+    static float autoScale(int pixelH);
+
+    float scale() const
+    {
+        return mScale;
+    }
 
     void run(const Callbacks &cb);
     void stop()
@@ -115,6 +129,13 @@ public:
     // for the session child's SIGCHLD self-pipe. The fd is not owned and must outlive the loop.
     void addFd(int fd, std::function<void()> onReadable);
     void removeFd(int fd);
+
+    //--- visibility ----------------------------------------------------
+    // Unmap and remap the window. NOT decoration: this window is override-redirect and covers
+    // the whole screen, so while a session is running it would sit on top of that session. It
+    // is unmapped before the session child is forked and remapped when the child exits.
+    void hide();
+    void show();
 
     //--- focus, grab and cursor ----------------------------------------
     // Take the keyboard. Retries briefly: immediately after the X server starts, or just after
