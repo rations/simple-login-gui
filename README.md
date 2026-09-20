@@ -176,8 +176,7 @@ The launcher detects it automatically and prefers it over Xorg. It may also be i
 ### nvidia proprietary driver
 
 The nvidia proprietary DDX does not support libseat device management. The installer detects it
-and writes `/etc/xlogin.conf` without `-seat seat0 -keeptty`. seatd still runs and is still
-available to Wayland compositors started from the session.
+and writes `/etc/xlogin.conf` without `-seat seat0 -keeptty`.
 
 ---
 
