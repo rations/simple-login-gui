@@ -220,9 +220,18 @@ echo "Installing binaries, fonts and config..."
 if [ "$MODE" = binary ]; then
     # The archive is an absolute tree. Copy it as-is: the paths inside the binary were
     # compiled for exactly these locations, which is why the archive is not relocatable.
+    #
+    # --remove-destination IS REQUIRED, not tidiness. Upgrading means writing over
+    # /usr/local/bin/xlogin while it IS RUNNING -- it is the login manager that started the
+    # session this installer is being typed into, sitting in its event loop waiting for that
+    # session to end. Writing to the image of a running executable gives ETXTBSY, and plain
+    # `cp` fails with "Text file busy". --remove-destination unlinks first, so the new file
+    # gets a new inode and the running process keeps the old one until the machine reboots --
+    # which is exactly the behaviour wanted, because rebooting is what activates the new one.
+    # (`make install` in source mode does not need this: install(1) already unlinks first.)
     for TREE in usr etc; do
         [ -d "$SELF_DIR/$TREE" ] || continue
-        cp -a --no-preserve=ownership "$SELF_DIR/$TREE/." "/$TREE/"
+        cp -a --remove-destination --no-preserve=ownership "$SELF_DIR/$TREE/." "/$TREE/"
     done
     chown -R root:root "$PREFIX/share/xlogin" "$PREFIX/bin/xlogin" "$PREFIX/bin/xlogin-launcher"
     chmod 755 "$PREFIX/bin/xlogin" "$PREFIX/bin/xlogin-launcher" /etc/init.d/xlogin-launcher
