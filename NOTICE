@@ -1,0 +1,82 @@
+simple-login-gui
+Copyright (C) the simple-login-gui authors
+Licensed under the GNU General Public License, version 2. See LICENSE.
+
+This file records every third-party component this program links, bundles or
+requires, with its licence and the reason it is here. GPL-2.0 is the project's
+licence and every entry below is compatible with it.
+
+
+LINKED LIBRARIES
+================
+
+cairo                            LGPL-2.1 or MPL-1.1 (dual)
+    All drawing. This program has no toolkit: the login screen is composed by
+    hand into an ARGB32 image surface and blitted once to an Xlib surface.
+    Also reads PNG natively, which is why only JPEG needs a separate decoder.
+
+FreeType                         FTL (BSD-style) or GPL-2.0 (dual)
+    Font rasterisation, through cairo's FreeType backend. Used directly rather
+    than through fontconfig so the two bundled faces can be loaded by path --
+    a login screen draws before any user profile exists and must not depend on
+    a working fontconfig cache.
+
+libX11 (Xlib)                    MIT
+    The window, the event loop, the keyboard grab and the input method. No
+    toolkit sits between this program and the X server.
+
+libXrandr                        MIT
+    Finding the primary output, so that on a two-monitor machine the login
+    panel is centred on one screen rather than across the bezel.
+
+libjpeg-turbo                    IJG (BSD-style)
+    JPEG background images, and nothing else. Cairo reads PNG and does not
+    read JPEG; that is the entire reason this dependency exists. The decoder
+    runs as root before anybody has authenticated, so its default error
+    handler -- which calls exit() -- is replaced, and both the file size and
+    the pixel dimensions are capped before it is handed anything.
+
+Linux-PAM (libpam)               BSD-3-Clause or GPL-2.0 (dual)
+    Authentication. Every decision about whether a password is correct, an
+    account is valid or a session may be opened belongs to PAM and to
+    /etc/pam.d/xlogin, not to this program.
+
+
+BUNDLED FONTS
+=============
+
+Installed to <prefix>/share/xlogin/fonts/ and loaded by path. Their licence
+texts are installed alongside them.
+
+Michroma                         SIL Open Font License 1.1
+    Copyright the Michroma Project Authors.
+    The title face. Licence text: fonts/Michroma-OFL.txt
+
+Roboto                           Apache License 2.0
+    Copyright the Roboto Project Authors.
+    Everything else on the screen. Licence text: fonts/Roboto-LICENSE.txt
+
+Both are bundled rather than resolved through fontconfig, for the reason given
+under FreeType above. Neither is modified.
+
+
+RUNTIME PROGRAMS
+================
+
+Not linked, and each one located by probing an absolute path -- never through
+$PATH, and never through a shell.
+
+shutdown(8)                      part of sysvinit-core (GPL-2.0)
+    The Shutdown and Restart entries in the Options menu. Found by probing
+    /usr/sbin/shutdown, /sbin/shutdown, /usr/bin/shutdown and /bin/shutdown
+    with access(X_OK) at the moment it is needed, because /sbin is a symlink
+    to /usr/sbin on some systems and a real directory on others.
+
+/bin/sh                          whatever the system provides
+    Used once, to run the user's ~/.xinitrc -- which is a shell script, so
+    there is no way to run it that is not a shell. It happens after the
+    privilege drop, as the target user, never as root.
+
+No other external program is run. In particular this program does not use
+chvt(1) (it issues the VT_ACTIVATE ioctl itself), pkill(1) (it walks /proc
+itself) or xsetroot(1) (its own window covers the screen).

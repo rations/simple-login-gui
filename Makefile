@@ -97,10 +97,50 @@ tools/%.o: tools/%.cpp
 clean:
 	rm -f $(GFX_OBJS) $(PLAT_OBJS) $(SESSION_OBJS) $(MAIN_OBJS) tools/*.o tools/uirender xlogin
 
-install:
-	@echo "install: lands with the packaging phase"; exit 1
+# --- install --------------------------------------------------------------------------------
+# DESTDIR is honoured throughout so this can be staged into a package root.
+#
+# NOTE what is NOT here: /etc/inittab, the user's groups, ~/.xinitrc and /etc/xlogin.conf.
+# Those are decisions about a particular machine and its users, and install.sh asks about them.
+# `make install` puts files where they go and changes nothing else -- so it is safe to re-run,
+# and in particular it will not overwrite a config that has a background setting in it.
+install: xlogin
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 755 xlogin                    $(DESTDIR)$(BINDIR)/xlogin
+	install -m 755 xlogin-launcher           $(DESTDIR)$(BINDIR)/xlogin-launcher
+	install -d $(DESTDIR)$(SYSCONFDIR)/pam.d
+	install -m 644 pam.d/xlogin              $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin
+	install -d $(DESTDIR)$(SYSCONFDIR)/init.d
+	install -m 755 etc_init.d_xlogin-launcher $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
+	install -d $(DESTDIR)$(SYSCONFDIR)/polkit-1/rules.d
+	install -m 644 polkit/10-local.rules     $(DESTDIR)$(SYSCONFDIR)/polkit-1/rules.d/10-local.rules
+	install -d $(DESTDIR)$(SHAREDIR)/fonts
+	install -m 644 resources/fonts/Michroma-Regular.ttf $(DESTDIR)$(SHAREDIR)/fonts/
+	install -m 644 resources/fonts/Roboto-Regular.ttf   $(DESTDIR)$(SHAREDIR)/fonts/
+	install -m 644 resources/fonts/Michroma-OFL.txt     $(DESTDIR)$(SHAREDIR)/fonts/
+	install -m 644 resources/fonts/Roboto-LICENSE.txt   $(DESTDIR)$(SHAREDIR)/fonts/
+	install -m 644 NOTICE                    $(DESTDIR)$(SHAREDIR)/NOTICE
+# The backgrounds directory is 755 and root-owned ON PURPOSE, and the program refuses to read
+# anything from it that is not a root-owned regular file. An image decoder is a parser, and
+# this one runs as root before anybody has authenticated -- the mitigation is that the only
+# people who can put a file here are people who are already root.
+# Ownership is not forced here -- `sudo make install` already creates it as root, and
+# forcing it breaks a staged build into a package root as an ordinary user. If it somehow
+# ends up owned by anybody else, the program refuses to read images from it and draws the
+# flat ground, which is the safe way for that to fail.
+	install -d -m 755 $(DESTDIR)$(BGDIR)
+	@echo
+	@echo "Installed. NOT done by this target, because they are decisions about this machine:"
+	@echo "  /etc/inittab            (replace the tty1 getty with xlogin-launcher)"
+	@echo "  /etc/xlogin.conf        (XSERVER_FLAGS for your GPU; XLOGIN_CONSOLE_VT)"
+	@echo "  group membership        (input, video, plugdev)"
+	@echo "  ~/.xinitrc              (what the session actually runs)"
+	@echo "Run install.sh to be asked about those, or see README.md to do it by hand."
 
 uninstall:
-	rm -f $(BINDIR)/xlogin $(BINDIR)/xlogin-launcher
-	rm -f $(SYSCONFDIR)/pam.d/xlogin $(SYSCONFDIR)/xlogin.conf
-	rm -rf $(SHAREDIR)
+	rm -f $(DESTDIR)$(BINDIR)/xlogin $(DESTDIR)$(BINDIR)/xlogin-launcher
+	rm -f $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin
+	rm -f $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
+# /etc/xlogin.conf is deliberately left: it holds XSERVER_FLAGS, which somebody may have had
+# to work out for their GPU, and removing a binary is not a reason to throw that away.
+	rm -rf $(DESTDIR)$(SHAREDIR)
