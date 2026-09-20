@@ -2,8 +2,6 @@
 # Anchored with a leading slash: an unanchored `xlogin` also matches pam.d/xlogin, which is a
 # tracked, required config file.
 /xlogin
-/xlogin-gtk2
-/xlogin-gtk3
 /tools/uirender
 *.o
 *.so
