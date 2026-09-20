@@ -86,8 +86,7 @@ static int conversation(int num_msg, const struct pam_message **msg, struct pam_
 
         /* strdup failing is out of memory, and an out-of-memory login must fail rather than
          * hand PAM a NULL response it will dereference. */
-        if ((msg[i]->msg_style == PAM_PROMPT_ECHO_OFF ||
-             msg[i]->msg_style == PAM_PROMPT_ECHO_ON) &&
+        if ((msg[i]->msg_style == PAM_PROMPT_ECHO_OFF || msg[i]->msg_style == PAM_PROMPT_ECHO_ON) &&
             !out[i].resp)
             goto conv_error;
     }

@@ -28,7 +28,7 @@ extern "C" {
 
 typedef struct {
     int ok;
-    pid_t pid;          /* the session child, valid when ok */
+    pid_t pid;           /* the session child, valid when ok */
     const char *message; /* why not, when !ok; storage owned by this module */
 } launch_result;
 

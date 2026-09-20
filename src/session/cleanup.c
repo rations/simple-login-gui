@@ -130,8 +130,7 @@ int cleanup_kill_user_processes(uid_t uid)
 
     n = signal_user_processes(uid, SIGTERM);
     if (n < 0) {
-        fprintf(stderr, "xlogin: could not read /proc to purge the session: %s\n",
-                strerror(errno));
+        fprintf(stderr, "xlogin: could not read /proc to purge the session: %s\n", strerror(errno));
         return -1;
     }
     if (n == 0)

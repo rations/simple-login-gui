@@ -27,15 +27,18 @@
 
 #include "geometry.h"
 #include "gfx/image.h"
+#include "gfx/menu.h"
 #include "platform/keymap.h"
 #include "platform/respath.h"
 #include "platform/x11window.h"
 #include "ui/panel.h"
 
 extern "C" {
+#include "config.h"
 #include "session/auth.h"
 #include "session/cleanup.h"
 #include "session/launch.h"
+#include "session/power.h"
 }
 
 #include <X11/Xlib.h>
@@ -52,6 +55,7 @@ extern "C" {
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 using namespace xlogin;
 
@@ -125,13 +129,35 @@ public:
 
     void setUp()
     {
+        config_load(&mCfg);
+
         mPanel.layout(mWin.bounds(), mWin.primaryBounds());
         mPanel.setHostname(hostName());
+        applyBackground();
         mPanel.reset();
 
         mPanel.cb.submit = [this] { submit(); };
         mPanel.cb.options = [this] { options(); };
+        mPanel.cb.menuAction = [this](const MenuItem &item) { menuAction(item); };
+
+        // Warn once, at startup, rather than at the moment somebody needs the console: a VT
+        // with no getty on it shows a black screen with a cursor, which reads as a crash.
+        if (power_vt_has_getty(mCfg.console_vt) == 0) {
+            fprintf(stderr,
+                    "xlogin: no getty appears to respawn on tty%d, so the Console entry may "
+                    "leave a blank screen; check /etc/inittab\n",
+                    mCfg.console_vt);
+        }
     }
+
+    ~App()
+    {
+        if (mBackground)
+            cairo_surface_destroy(mBackground);
+    }
+
+    App(const App &) = delete;
+    App &operator=(const App &) = delete;
 
     Panel &panel()
     {
@@ -148,6 +174,17 @@ public:
     {
         mPanel.motion(x, y);
         mWin.invalidate();
+    }
+
+    // Once every tick. The only thing that happens here is retaking the keyboard after a VT
+    // switch: there is no event that says "the user came back from tty2", and polling a
+    // single non-blocking attempt four times a second costs nothing.
+    void tick()
+    {
+        if (mSessionPid > 0 || mWin.keyboardGrabbed())
+            return;
+        if (mWin.tryGrabKeyboard())
+            mWin.invalidate();
     }
 
     void button(float x, float y, bool pressed)
@@ -299,19 +336,202 @@ private:
         mWin.invalidate();
     }
 
-    //--- options -------------------------------------------------------
+    //--- the Options menu ----------------------------------------------
     void options()
     {
-        // TODO(phase 3): open the Options menu -- Shutdown, Restart, Console, Background.
-        // Remove this when src/gfx/menu.cpp exists and the button opens it. Until then the
-        // button says so rather than doing nothing silently, because a control that does
-        // nothing at all is indistinguishable from a hung program.
-        mPanel.setStatus("Options are not wired up yet", false);
+        if (mPanel.menuIsOpen()) {
+            mPanel.closeMenu();
+            mWin.invalidate();
+            return;
+        }
+        showMainMenu();
+    }
+
+    void showMainMenu()
+    {
+        std::vector<MenuItem> items;
+
+        MenuItem console;
+        console.label = "Console (tty" + std::to_string(mCfg.console_vt) + ")";
+        console.action = MenuAction::Console;
+        items.push_back(console);
+
+        MenuItem bg;
+        bg.label = "Background...";
+        bg.action = MenuAction::ShowBackgrounds;
+        items.push_back(bg);
+
+        // The two that cannot be undone, in a group of their own below a separator, so that
+        // neither is next to the entry somebody reaches for most often.
+        MenuItem restart;
+        restart.label = "Restart";
+        restart.action = MenuAction::Restart;
+        restart.destructive = true;
+        restart.startsGroup = true;
+        items.push_back(restart);
+
+        MenuItem shutdown;
+        shutdown.label = "Shut down";
+        shutdown.action = MenuAction::Shutdown;
+        shutdown.destructive = true;
+        items.push_back(shutdown);
+
+        MenuItem close;
+        close.label = "Close";
+        close.action = MenuAction::Dismiss;
+        close.startsGroup = true;
+        items.push_back(close);
+
+        mPanel.setMenuItems(std::move(items));
+        mPanel.openMenu();
+        mWin.invalidate();
+    }
+
+    void showBackgroundMenu()
+    {
+        std::vector<MenuItem> items;
+
+        MenuItem back;
+        back.label = "< Back";
+        back.action = MenuAction::BackToMain;
+        items.push_back(back);
+
+        MenuItem none;
+        none.label = "(none)";
+        none.action = MenuAction::SetBackground;
+        none.value = "";
+        none.startsGroup = true;
+        items.push_back(none);
+
+        // Only what is in the one root-owned directory, and only what passed the ownership
+        // checks in image.cpp. There is no file browser and there is not going to be one:
+        // letting an unauthenticated person at the keyboard enumerate the filesystem as root
+        // is a larger concession than a wallpaper picker is worth.
+        const std::vector<std::string> names = listBackgroundImages(XLOGIN_BACKGROUND_DIR);
+        for (const std::string &n : names) {
+            MenuItem item;
+            item.label = n;
+            item.action = MenuAction::SetBackground;
+            item.value = n;
+            items.push_back(item);
+        }
+
+        if (names.empty()) {
+            MenuItem empty;
+            empty.label = "(no images installed)";
+            empty.action = MenuAction::Nothing;
+            items.push_back(empty);
+        }
+
+        mPanel.setMenuItems(std::move(items));
+        mPanel.openMenu();
+        mWin.invalidate();
+    }
+
+    void menuAction(const MenuItem &item)
+    {
+        const char *msg = "";
+
+        switch (item.action) {
+            case MenuAction::Nothing:
+                return;
+
+            case MenuAction::Dismiss:
+                mPanel.closeMenu();
+                mWin.invalidate();
+                return;
+
+            case MenuAction::ShowBackgrounds:
+                showBackgroundMenu();
+                return;
+
+            case MenuAction::BackToMain:
+                showMainMenu();
+                return;
+
+            case MenuAction::SetBackground:
+                setBackground(item.value);
+                return;
+
+            case MenuAction::Console:
+                mPanel.closeMenu();
+                // The grab has to go before the switch, or this process is holding the
+                // keyboard on a VT nobody is looking at. tick() takes it back when the user
+                // returns with Alt+F1.
+                mWin.ungrabKeyboard();
+                if (power_switch_console(mCfg.console_vt, &msg) != 0) {
+                    mWin.grabKeyboard();
+                    mPanel.setStatus(msg, true);
+                }
+                mWin.invalidate();
+                return;
+
+            case MenuAction::Shutdown:
+                mPanel.closeMenu();
+                mPanel.setStatus("Shutting down...", false);
+                mWin.paintNow();
+                if (power_shutdown(&msg) != 0) {
+                    syslog(LOG_AUTHPRIV | LOG_ERR, "shutdown failed: %s", msg);
+                    mPanel.setStatus(msg, true);
+                }
+                mWin.invalidate();
+                return;
+
+            case MenuAction::Restart:
+                mPanel.closeMenu();
+                mPanel.setStatus("Restarting...", false);
+                mWin.paintNow();
+                if (power_restart(&msg) != 0) {
+                    syslog(LOG_AUTHPRIV | LOG_ERR, "restart failed: %s", msg);
+                    mPanel.setStatus(msg, true);
+                }
+                mWin.invalidate();
+                return;
+        }
+    }
+
+    //--- the background ------------------------------------------------
+    void applyBackground()
+    {
+        if (mBackground) {
+            cairo_surface_destroy(mBackground);
+            mBackground = nullptr;
+        }
+        if (mCfg.background[0])
+            mBackground = loadBackgroundImage(XLOGIN_BACKGROUND_DIR, mCfg.background);
+        // A null surface is the flat ground, which is exactly what a refused or unreadable
+        // image must degrade to. drawBackground treats it as a no-op.
+        mPanel.setBackground(mBackground, bgModeFromString(mCfg.bg_mode));
+    }
+
+    void setBackground(const std::string &name)
+    {
+        snprintf(mCfg.background, sizeof(mCfg.background), "%s", name.c_str());
+        applyBackground();
+
+        if (!name.empty() && !mBackground) {
+            // listBackgroundImages only sniffs each file's first eight bytes, so a truncated
+            // or oversized image can be offered and then fail to load. Say so, and leave the
+            // flat ground up rather than writing a setting that does not work.
+            mPanel.setStatus("That image could not be loaded", true);
+            mPanel.closeMenu();
+            mWin.invalidate();
+            return;
+        }
+
+        if (config_set("XLOGIN_BACKGROUND", mCfg.background) != 0)
+            mPanel.setStatus("Background applied, but could not be saved", true);
+        else
+            mPanel.clearStatus();
+
+        mPanel.closeMenu();
         mWin.invalidate();
     }
 
     X11Window &mWin;
     Panel mPanel;
+    xlogin_config mCfg = {};
+    cairo_surface_t *mBackground = nullptr;
     std::string mUser;
     pid_t mSessionPid = -1;
 };
@@ -365,6 +585,7 @@ int main()
     cb.key = [&app](KeySym sym, const char *text, int len, unsigned state) {
         return app.key(sym, text, len, state);
     };
+    cb.tick = [&app] { app.tick(); };
 
     win.run(cb);
 

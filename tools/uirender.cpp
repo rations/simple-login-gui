@@ -29,6 +29,7 @@
 #include "gfx/image.h"
 #include "gfx/ink.h"
 #include "gfx/keys.h"
+#include "gfx/menu.h"
 #include "gfx/palette.h"
 #include "ui/panel.h"
 
@@ -126,6 +127,9 @@ void typeInto(Panel &p, const char *utf8)
 }
 
 //------------------------------------------------------------------------
+// Which menu, if any, is open in a scene.
+enum class Show { NoMenu, MainMenu, ArmedMenu, BackgroundMenu };
+
 struct Scene {
     const char *name;
     const char *user;
@@ -134,15 +138,50 @@ struct Scene {
     bool statusIsError;
     bool enabled;
     bool passwordFocused;
+    Show show;
 };
 
+// The main menu as main.cpp builds it. Kept here rather than shared, deliberately: if the two
+// drift, the audit stops measuring the real thing, and a shared builder would hide that by
+// making them impossible to drift. The labels here are the ones that must fit.
+std::vector<MenuItem> mainMenuItems()
+{
+    std::vector<MenuItem> v;
+    v.push_back({"Console (tty2)", MenuAction::Console, "", false, false});
+    v.push_back({"Background...", MenuAction::ShowBackgrounds, "", false, false});
+    v.push_back({"Restart", MenuAction::Restart, "", true, true});
+    v.push_back({"Shut down", MenuAction::Shutdown, "", true, false});
+    v.push_back({"Close", MenuAction::Dismiss, "", false, true});
+    return v;
+}
+
+std::vector<MenuItem> backgroundMenuItems()
+{
+    std::vector<MenuItem> v;
+    v.push_back({"< Back", MenuAction::BackToMain, "", false, false});
+    v.push_back({"(none)", MenuAction::SetBackground, "", false, true});
+    // Worst case: a filename at the length a menu row can hold, and one that is far too long.
+    v.push_back({"mountains-at-dusk.jpg", MenuAction::SetBackground, "mountains-at-dusk.jpg", false,
+                 false});
+    v.push_back({"a-really-quite-long-wallpaper-filename-somebody-will-have.png",
+                 MenuAction::SetBackground, "x.png", false, false});
+    return v;
+}
+
 const Scene kScenes[] = {
-    {"empty", "", "", "", false, true, false},
-    {"typing", "human", "hunter2", "", false, true, true},
+    {"empty", "", "", "", false, true, false, Show::NoMenu},
+    {"typing", "human", "hunter2", "", false, true, true, Show::NoMenu},
     {"rejected", "aVeryLongUserNameThatSomebodyWillHaveSoonerOrLater", "",
-     "Your account has expired; please contact your system administrator", true, true, false},
-    {"busy", "human", "correct horse battery staple", "Authenticating...", false, false, true},
-    {"accents", "jean-françois", "pässwörd-with-ümläuts", "", false, true, true},
+     "Your account has expired; please contact your system administrator", true, true, false,
+     Show::NoMenu},
+    {"busy", "human", "correct horse battery staple", "Authenticating...", false, false, true,
+     Show::NoMenu},
+    {"accents", "jean-françois", "pässwörd-with-ümläuts", "", false, true, true, Show::NoMenu},
+    {"menu", "human", "", "", false, true, false, Show::MainMenu},
+    // The confirm step, and the case that matters most: the menu open while the rest of the
+    // panel is DISABLED, which is what somebody sees if PAM has hung and they need a way out.
+    {"menu-armed", "human", "", "Authenticating...", false, false, false, Show::ArmedMenu},
+    {"menu-backgrounds", "human", "", "", false, true, false, Show::BackgroundMenu},
 };
 
 //------------------------------------------------------------------------
@@ -181,6 +220,23 @@ bool renderScene(const FontStack &fonts, const Scene &sc, float scale, int scree
         if (sc.status[0])
             panel.setStatus(sc.status, sc.statusIsError);
         panel.setEnabled(sc.enabled);
+
+        if (sc.show != Show::NoMenu) {
+            panel.setMenuItems(sc.show == Show::BackgroundMenu ? backgroundMenuItems()
+                                                               : mainMenuItems());
+            panel.openMenu();
+            if (sc.show == Show::ArmedMenu) {
+                // Walk down to Shut down and arm it, through the key handler rather than by
+                // reaching into the menu -- so this also proves the keyboard path works while
+                // the panel behind it is disabled.
+                panel.key(Key::Down, "", 0);
+                panel.key(Key::Down, "", 0);
+                panel.key(Key::Down, "", 0);
+                panel.key(Key::Enter, "", 0);
+                if (!panel.menuIsOpen())
+                    failure("scene %s: arming Shut down closed the menu instead", sc.name);
+            }
+        }
 
         panel.draw(c);
 
@@ -240,6 +296,22 @@ void auditLayout(const FontStack &fonts)
               geo::kLoginW - 2.0f * geo::kFieldPadX);
     checkFits(c, Font::Body, geo::kButtonTextSize, "the Options button label", "Options",
               geo::kOptionsW - 2.0f * geo::kFieldPadX);
+
+    // Menu labels, against the menu's own slot. The long filename is expected to be clipped
+    // -- a wallpaper can be called anything -- so it is excluded from the check and the rest
+    // are not.
+    const float menuSlot = geo::kMenuW - 2.0f * geo::kMenuPadX;
+    for (const MenuItem &m : mainMenuItems()) {
+        checkFits(c, Font::Body, geo::kMenuTextSize, "a menu label", m.label, menuSlot);
+        if (m.destructive) {
+            // The armed form is longer than the label, and it is the one that must not be
+            // clipped: "Confirm: Shut do..." is not a confirmation anybody should act on.
+            checkFits(c, Font::Body, geo::kMenuTextSize, "an armed menu label",
+                      "Confirm: " + m.label, menuSlot);
+        }
+    }
+    checkFits(c, Font::Body, geo::kMenuTextSize, "the longest console label", "Console (tty63)",
+              menuSlot);
 
     // Placeholders, which are drawn in the field's own slot.
     const float fieldSlot = geo::kFieldW - 2.0f * geo::kFieldPadX;

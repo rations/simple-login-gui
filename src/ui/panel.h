@@ -20,6 +20,7 @@
 #include "../gfx/canvas.h"
 #include "../gfx/image.h"
 #include "../gfx/keys.h"
+#include "../gfx/menu.h"
 #include "../gfx/textfield.h"
 #include "../gfx/widgets.h"
 
@@ -36,8 +37,12 @@ public:
         // The user asked to log in -- by clicking Log in, or by pressing Return in either
         // field. The owner reads username() and password() and decides.
         std::function<void()> submit;
-        // The Options button was pressed.
+        // The Options button was pressed. The owner fills the menu and calls openMenu(),
+        // rather than the panel deciding what is on it -- what a machine can be asked to do
+        // is not a layout question.
         std::function<void()> options;
+        // A menu row was activated, past its confirmation step if it had one.
+        std::function<void(const MenuItem &)> menuAction;
     };
     Callbacks cb;
 
@@ -83,6 +88,22 @@ public:
     // not have to type their name again.
     void reset();
 
+    //--- the Options menu ----------------------------------------------
+    void setMenuItems(std::vector<MenuItem> items)
+    {
+        mMenu.setItems(std::move(items));
+    }
+    // Opens above the Options button. Safe to call when it is already open.
+    void openMenu();
+    void closeMenu()
+    {
+        mMenu.close();
+    }
+    bool menuIsOpen() const
+    {
+        return mMenu.isOpen();
+    }
+
     TextField &username()
     {
         return mUser;
@@ -101,13 +122,15 @@ public:
     }
 
 private:
-    void focusUser();
-    void focusPass();
-    // Tab, Shift+Tab and Return all need to know which field has the caret.
-    bool userFocused() const
-    {
-        return mUser.focused();
-    }
+    // The keyboard focus ring. The BUTTONS are in it, not just the fields, and that is the
+    // point: the Options menu is this screen's escape route, and an escape route reachable
+    // only with a pointer is no use to somebody whose pointer is the reason they need it.
+    enum class Focus { User, Pass, Options, Login };
+
+    void setFocus(Focus f);
+    void focusNext(int delta);
+
+    Focus mFocus = Focus::User;
 
     Rect mScreen;
     Rect mPanel;
@@ -121,6 +144,8 @@ private:
     std::string mStatus;
     bool mStatusIsError = false;
     bool mEnabled = true;
+
+    Menu mMenu;
 
     cairo_surface_t *mBackground = nullptr;
     BgMode mBgMode = BgMode::Fill;

@@ -59,6 +59,19 @@ void Panel::layout(const Rect &screen, const Rect &primary)
 
     mOptions.rect = Rect(px + geo::kOptionsX, py + geo::kButtonY, geo::kOptionsW, geo::kButtonH);
     mOptions.label = "Options";
+
+    // Forwarded rather than handled: what a machine can be asked to do is not the layout's
+    // business, and the panel would otherwise have to know what a VT is.
+    mMenu.activate = [this](const MenuItem &item) {
+        if (cb.menuAction)
+            cb.menuAction(item);
+    };
+}
+
+void Panel::openMenu()
+{
+    mMenu.open(mOptions.rect, mScreen);
+    setFocus(Focus::Options);
 }
 
 //------------------------------------------------------------------------
@@ -89,27 +102,60 @@ void Panel::reset()
     mPass.clear();
     clearStatus();
     setEnabled(true);
-    if (mUser.empty())
-        focusUser();
-    else
-        focusPass();
+    mMenu.close();
+    setFocus(mUser.empty() ? Focus::User : Focus::Pass);
 }
 
-void Panel::focusUser()
+void Panel::setFocus(Focus f)
 {
-    mUser.setFocused(true);
-    mPass.setFocused(false);
+    mFocus = f;
+    mUser.setFocused(f == Focus::User);
+    mPass.setFocused(f == Focus::Pass);
 }
 
-void Panel::focusPass()
+// Move round the ring, skipping anything disabled. `delta` is +1 or -1.
+//
+// The loop is bounded by the number of stops rather than by "until we find an enabled one",
+// because while authentication is running only Options is enabled and an unbounded search
+// would spin forever on a panel where nothing was.
+void Panel::focusNext(int delta)
 {
-    mUser.setFocused(false);
-    mPass.setFocused(true);
+    const Focus ring[] = {Focus::User, Focus::Pass, Focus::Options, Focus::Login};
+    const int n = 4;
+
+    int at = 0;
+    for (int i = 0; i < n; ++i) {
+        if (ring[i] == mFocus)
+            at = i;
+    }
+
+    for (int step = 0; step < n; ++step) {
+        at = (at + delta + n) % n;
+        const Focus f = ring[at];
+        const bool usable = (f == Focus::User || f == Focus::Pass) ? mEnabled
+                            : (f == Focus::Login)                  ? mLogin.enabled
+                                                                   : mOptions.enabled;
+        if (usable) {
+            setFocus(f);
+            return;
+        }
+    }
 }
 
 //------------------------------------------------------------------------
 void Panel::motion(float x, float y)
 {
+    if (mMenu.isOpen()) {
+        mMenu.motion(x, y);
+        // Nothing behind an open menu highlights: a control lighting up under a menu that
+        // covers it reads as the menu being transparent to the pointer, which it is not.
+        mUser.setHovered(false);
+        mPass.setHovered(false);
+        mLogin.hovered = false;
+        mOptions.hovered = false;
+        return;
+    }
+
     mUser.setHovered(mUser.rect().contains(x, y));
     mPass.setHovered(mPass.rect().contains(x, y));
     mLogin.hovered = mLogin.enabled && mLogin.rect.contains(x, y);
@@ -124,6 +170,13 @@ void Panel::click(float x, float y, bool pressed)
     if (pressed)
         return;
 
+    // An open menu gets every click, including the ones outside it -- that click closes it
+    // and is consumed, so a mis-aimed dismissal cannot land on Log in.
+    if (mMenu.isOpen()) {
+        mMenu.click(x, y);
+        return;
+    }
+
     if (mOptions.hit(x, y)) {
         if (cb.options)
             cb.options();
@@ -134,12 +187,14 @@ void Panel::click(float x, float y, bool pressed)
             cb.submit();
         return;
     }
-    if (mUser.handleClick(x, y)) {
-        mPass.setFocused(false);
+    if (mUser.rect().contains(x, y) && mUser.enabled()) {
+        setFocus(Focus::User);
+        mUser.handleClick(x, y);
         return;
     }
-    if (mPass.handleClick(x, y)) {
-        mUser.setFocused(false);
+    if (mPass.rect().contains(x, y) && mPass.enabled()) {
+        setFocus(Focus::Pass);
+        mPass.handleClick(x, y);
         return;
     }
 }
@@ -147,33 +202,58 @@ void Panel::click(float x, float y, bool pressed)
 //------------------------------------------------------------------------
 void Panel::key(Key k, const char *utf8, int len)
 {
-    if (!mEnabled)
+    // The menu is modal while it is open, including when the rest of the panel is disabled.
+    // That is the case that matters: if PAM has hung, the menu is the only thing on this
+    // screen that still works, and it has to work from the keyboard.
+    if (mMenu.isOpen()) {
+        mMenu.key(k);
         return;
+    }
 
-    // The focused field gets first refusal, and consumes everything that is editing or text.
+    if (!mEnabled) {
+        // Everything but the fields is off, but the ring still has Options on it -- so a
+        // stuck authentication can still be escaped without a pointer.
+        if (k == Key::Tab || k == Key::BackTab)
+            focusNext(k == Key::Tab ? 1 : -1);
+        else if (k == Key::Enter && mFocus == Focus::Options && cb.options)
+            cb.options();
+        return;
+    }
+
+    // The focused field gets first refusal and consumes everything that is editing or text.
     if (mUser.handleKey(k, utf8, len) || mPass.handleKey(k, utf8, len))
         return;
 
     switch (k) {
-        // With exactly two fields, forward and backward are the same move, so Tab, Shift+Tab
-        // and the arrows all toggle. Splitting them would be two code paths that can only ever
-        // agree.
         case Key::Tab:
+            focusNext(1);
+            return;
         case Key::BackTab:
+            focusNext(-1);
+            return;
+
+        // The arrows move between the two fields only. Inside the ring they would mean
+        // "leave the form", which is not what an arrow key means anywhere else.
         case Key::Up:
+            if (mFocus == Focus::Pass)
+                setFocus(Focus::User);
+            return;
         case Key::Down:
-            if (userFocused())
-                focusPass();
-            else
-                focusUser();
+            if (mFocus == Focus::User)
+                setFocus(Focus::Pass);
             return;
 
         case Key::Enter:
+            if (mFocus == Focus::Options) {
+                if (cb.options)
+                    cb.options();
+                return;
+            }
             // Return in the username field moves on rather than submitting, which is what
             // every other login screen does and what muscle memory expects. Return in the
-            // password field, or in either field once both are filled, submits.
-            if (userFocused() && mPass.empty()) {
-                focusPass();
+            // password field, or with the button focused, submits.
+            if (mFocus == Focus::User && mPass.empty()) {
+                setFocus(Focus::Pass);
                 return;
             }
             if (cb.submit)
@@ -186,7 +266,7 @@ void Panel::key(Key k, const char *utf8, int len)
             mPass.clear();
             mUser.clear();
             clearStatus();
-            focusUser();
+            setFocus(Focus::User);
             return;
 
         default:
@@ -253,8 +333,18 @@ void Panel::draw(Canvas &c) const
                      py + geo::kStatusBaselineY);
     }
 
-    mOptions.draw(c);
-    mLogin.draw(c);
+    // A focused button is drawn as though hovered. One treatment for "this is where the
+    // next Return goes", whether it got there by pointer or by Tab.
+    Button options = mOptions;
+    Button login = mLogin;
+    options.hovered = options.hovered || mFocus == Focus::Options;
+    login.hovered = login.hovered || (mFocus == Focus::Login && login.enabled);
+    options.draw(c);
+    login.draw(c);
+
+    // Last, and over everything: the menu is the only thing on this screen that is allowed
+    // to leave the panel.
+    mMenu.draw(c);
 }
 
 } // namespace xlogin

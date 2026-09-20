@@ -321,6 +321,20 @@ bool X11Window::grabKeyboard()
     return false;
 }
 
+bool X11Window::tryGrabKeyboard()
+{
+    if (!mDpy || !mWin)
+        return false;
+    if (mGrabbed)
+        return true;
+
+    if (XGrabKeyboard(mDpy, mWin, True, GrabModeAsync, GrabModeAsync, CurrentTime) == GrabSuccess) {
+        mGrabbed = true;
+        return true;
+    }
+    return false;
+}
+
 void X11Window::ungrabKeyboard()
 {
     if (mDpy && mGrabbed) {

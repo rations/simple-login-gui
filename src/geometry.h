@@ -107,6 +107,34 @@ constexpr float kOptionsX = kMargin;
 // because a line of text has more ink above its centre than below it.
 constexpr float kLabelBaselineBias = 0.36f;
 
+//--- the Options menu -----------------------------------------------------------------------
+//
+// Drawn in SCREEN coordinates, not panel coordinates: it opens above the Options button and is
+// allowed to extend past the panel's edge, because the alternative is either a cramped menu or
+// a taller panel that is mostly empty whenever the menu is shut.
+constexpr float kMenuW = 230.0f;
+constexpr float kMenuRowH = 28.0f;
+constexpr float kMenuPadY = 6.0f;
+constexpr float kMenuPadX = 12.0f;
+constexpr float kMenuRadius = 4.0f;
+constexpr float kMenuTextSize = 12.0f;
+// Between the top of the Options button and the bottom of the menu. Enough that the menu
+// reads as a separate surface and not as a taller button.
+constexpr float kMenuGap = 8.0f;
+// The separator drawn above a trailing group, at the rule alpha.
+constexpr float kMenuSeparatorInset = 8.0f;
+
+constexpr float menuHeight(int rows)
+{
+    return 2.0f * kMenuPadY + static_cast<float>(rows) * kMenuRowH;
+}
+
+static_assert(kMenuPadX > kFieldPadX * 0.5f, "menu labels would sit too close to the edge");
+static_assert(kMenuW > kOptionsW, "the menu should be wider than the button that opens it");
+// A menu row must be able to hold its label without the descenders touching the row below.
+static_assert(kMenuRowH > nominalAscent(kMenuTextSize) + nominalDescent(kMenuTextSize),
+              "a menu row is shorter than the text in it");
+
 //--- clearances, asserted -------------------------------------------------------------------
 
 // The title's descender must clear the rule, and the rule must clear the host line's ascender.

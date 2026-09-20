@@ -35,7 +35,8 @@ HARDEN   = -O2 -fstack-protector-strong -fstack-clash-protection -fcf-protection
 LDHARDEN = -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
 
 DEFS = -DXLOGIN_RESOURCE_DIR_DEFAULT=\"$(SHAREDIR)\" \
-       -DXLOGIN_BACKGROUND_DIR=\"$(BGDIR)\"
+       -DXLOGIN_BACKGROUND_DIR=\"$(BGDIR)\" \
+       -DXLOGIN_CONFIG_PATH=\"$(SYSCONFDIR)/xlogin.conf\"
 
 COMMON   = $(WARN) $(HARDEN) $(DEFS) -Isrc
 CFLAGS   += -std=c11   $(COMMON)
@@ -48,9 +49,10 @@ PAM_LIBS = -lpam
 # deliberately -- the entire visible surface of the login screen is auditable headlessly
 # because of it, and an #include of Xlib.h under src/gfx/ or src/ui/ would silently cost that.
 GFX_OBJS = src/gfx/canvas.o src/gfx/fontstack.o src/gfx/image.o src/gfx/textfield.o \
-           src/gfx/widgets.o src/ui/panel.o
+           src/gfx/widgets.o src/gfx/menu.o src/ui/panel.o
 PLAT_OBJS = src/platform/xerror.o src/platform/respath.o src/platform/x11window.o
-SESSION_OBJS = src/session/auth.o src/session/launch.o src/session/cleanup.o
+SESSION_OBJS = src/session/auth.o src/session/launch.o src/session/cleanup.o \
+               src/session/power.o src/config.o
 MAIN_OBJS = src/main.o
 
 .PHONY: all clean install uninstall gfx tools
@@ -78,6 +80,12 @@ src/platform/%.o: src/platform/%.cpp
 	$(CXX) $(CXXFLAGS) $(GFX_CFLAGS) $(X11_CFLAGS) -c -o $@ $<
 
 src/session/%.o: src/session/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# src/config.c is the only C file outside src/session/: it is read by the C++ half and
+# written by the menu, and it parses a file that /bin/sh sources, so it belongs in the
+# language with no hidden allocation for the same reason the session half does.
+src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 tools/uirender: tools/uirender.o $(GFX_OBJS)

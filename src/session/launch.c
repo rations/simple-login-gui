@@ -29,12 +29,11 @@ static char g_message[256];
  * Ported unchanged. Runs in the CHILD, after the privilege drop. */
 static void load_locale_env(void)
 {
-    static const char *const keys[] = {"LANG",        "LANGUAGE",    "LC_ALL",
-                                       "LC_CTYPE",    "LC_NUMERIC",  "LC_TIME",
-                                       "LC_COLLATE",  "LC_MONETARY", "LC_MESSAGES",
-                                       "LC_PAPER",    "LC_NAME",     "LC_ADDRESS",
-                                       "LC_TELEPHONE", "LC_MEASUREMENT",
-                                       "LC_IDENTIFICATION", NULL};
+    static const char *const keys[] = {
+        "LANG",    "LANGUAGE",   "LC_ALL",       "LC_CTYPE",       "LC_NUMERIC",
+        "LC_TIME", "LC_COLLATE", "LC_MONETARY",  "LC_MESSAGES",    "LC_PAPER",
+        "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION",
+        NULL};
     static const char *const files[] = {"/etc/default/locale", "/etc/environment", NULL};
 
     for (int f = 0; files[f]; f++) {

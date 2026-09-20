@@ -143,6 +143,10 @@ public:
     // Returns false if it could not be taken, which is a warning and not a fatal error -- a
     // login screen that will not accept typing is worse than one typed without a grab.
     bool grabKeyboard();
+    // One attempt, no retry and no warning. For polling from the tick after a VT switch: the
+    // retrying version sleeps for up to a second, which is fine once at startup and is not
+    // fine four times a second for as long as somebody is away at a text console.
+    bool tryGrabKeyboard();
     void ungrabKeyboard();
     bool keyboardGrabbed() const
     {
