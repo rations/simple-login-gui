@@ -38,9 +38,18 @@ X11_LIBS    := $(shell pkg-config --libs   $(X11_PKGS))
 # --- warnings and hardening ---------------------------------------------------------------
 # -Werror is not negotiable: this tree vendors no upstream source, so every warning is ours.
 WARN     = -Wall -Wextra -Werror -Wformat=2 -Wformat-security
-HARDEN   = -O2 -fstack-protector-strong -fstack-clash-protection -fcf-protection=full \
+HARDEN   = -O2 -fstack-protector-strong -fstack-clash-protection \
            -D_FORTIFY_SOURCE=3 -fPIE
 LDHARDEN = -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+
+# -fcf-protection is x86 only; aarch64 has -mbranch-protection instead.
+ARCH := $(shell $(CXX) -dumpmachine)
+ifneq ($(findstring x86_64,$(ARCH)),)
+HARDEN += -fcf-protection=full
+endif
+ifneq ($(findstring aarch64,$(ARCH)),)
+HARDEN += -mbranch-protection=standard
+endif
 
 DEFS = -DXLOGIN_RESOURCE_DIR_DEFAULT=\"$(SHAREDIR)\" \
        -DXLOGIN_BACKGROUND_DIR=\"$(BGDIR)\" \
@@ -128,11 +137,13 @@ clean:
 install: xlogin
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 xlogin                    $(DESTDIR)$(BINDIR)/xlogin
-	install -m 755 xlogin-launcher           $(DESTDIR)$(BINDIR)/xlogin-launcher
+	sed 's|/usr/local/bin/xlogin|$(BINDIR)/xlogin|g' xlogin-launcher > $(DESTDIR)$(BINDIR)/xlogin-launcher
+	chmod 755 $(DESTDIR)$(BINDIR)/xlogin-launcher
 	install -d $(DESTDIR)$(SYSCONFDIR)/pam.d
 	install -m 644 pam.d/xlogin              $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin
 	install -d $(DESTDIR)$(SYSCONFDIR)/init.d
-	install -m 755 etc_init.d_xlogin-launcher $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
+	sed 's|/usr/local/bin/xlogin-launcher|$(BINDIR)/xlogin-launcher|g' etc_init.d_xlogin-launcher > $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
+	chmod 755 $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
 	install -d $(DESTDIR)$(SYSCONFDIR)/polkit-1/rules.d
 	install -m 644 polkit/10-local.rules     $(DESTDIR)$(SYSCONFDIR)/polkit-1/rules.d/10-local.rules
 	install -d $(DESTDIR)$(SHAREDIR)/fonts
