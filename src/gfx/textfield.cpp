@@ -71,6 +71,24 @@ void TextField::clear()
     mCaret = 0;
 }
 
+void TextField::setText(const char *utf8)
+{
+    clear();
+    if (!utf8)
+        return;
+    // insert() takes at most 64 bytes a call (its filter buffer), so feed it in pieces.
+    size_t left = strlen(utf8);
+    while (left > 0) {
+        const int n = left > 32 ? 32 : static_cast<int>(left);
+        const size_t before = mLen;
+        insert(utf8, n);
+        if (mLen == before)
+            return; // full, or nothing in this piece was text: stop rather than spin
+        utf8 += n;
+        left -= static_cast<size_t>(n);
+    }
+}
+
 //------------------------------------------------------------------------
 Rect TextField::textSlot() const
 {

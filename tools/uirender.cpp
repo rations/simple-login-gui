@@ -70,6 +70,14 @@ const char *const kStatusWorstCase[] = {
     "Failed to create runtime dir",
     "User not found",
     "Starting session...",
+    // Automatic login. The countdown carries a username, so it is measured with a realistic
+    // one; a name long enough to push it over is clipped with an ellipsis like any other.
+    "Logging in as jean-francois in 3s - press any key to cancel",
+    "Automatic login failed; log in below",
+    "Could not save; automatic login is still on",
+    "Takes effect when you log in",
+    "Automatic login turned off",
+    "Automatic login cancelled",
 };
 
 const char *const kUsernameWorstCase[] = {
@@ -139,6 +147,8 @@ struct Scene {
     bool enabled;
     bool passwordFocused;
     Show show;
+    // The automatic-login box. Last, so the scenes that predate it need not mention it.
+    bool autologinChecked = false;
 };
 
 // The main menu as main.cpp builds it. Kept here rather than shared, deliberately: if the two
@@ -182,6 +192,14 @@ const Scene kScenes[] = {
     // panel is DISABLED, which is what somebody sees if PAM has hung and they need a way out.
     {"menu-armed", "human", "", "Authenticating...", false, false, false, Show::ArmedMenu},
     {"menu-backgrounds", "human", "", "", false, true, false, Show::BackgroundMenu},
+    // Automatic login: ticked with its note, the boot countdown (the panel disabled, the box
+    // still showing its tick), and the screen a failed automatic login falls back to.
+    {"autologin-checked", "human", "hunter2", "Takes effect when you log in", false, true, true,
+     Show::NoMenu, true},
+    {"autologin-countdown", "human", "", "Logging in as human in 3s - press any key to cancel",
+     false, false, false, Show::NoMenu, true},
+    {"autologin-failed", "human", "", "Automatic login failed; log in below", true, true, false,
+     Show::NoMenu, true},
 };
 
 //------------------------------------------------------------------------
@@ -219,6 +237,7 @@ bool renderScene(const FontStack &fonts, const Scene &sc, float scale, int scree
         }
         if (sc.status[0])
             panel.setStatus(sc.status, sc.statusIsError);
+        panel.setAutologinChecked(sc.autologinChecked);
         panel.setEnabled(sc.enabled);
 
         if (sc.show != Show::NoMenu) {
@@ -287,6 +306,11 @@ void auditLayout(const FontStack &fonts)
     checkFits(c, Font::Body, geo::kLabelSize, "the password label", "Password", inner);
     checkFits(c, Font::Body, geo::kHostSize, "the hostname line", "devuan-excalibur.local", inner);
 
+    // The checkbox label, against the part of the hit rect to the right of the box: a label
+    // that ran past it would have a click on its last word miss the control.
+    checkFits(c, Font::Body, geo::kCheckLabelSize, "the automatic-login label",
+              "Log in automatically", geo::kCheckX + geo::kCheckHitW - geo::kCheckLabelX);
+
     for (const char *s2 : kStatusWorstCase)
         checkFits(c, Font::Body, geo::kStatusSize, "a status message", s2, geo::kStatusW);
 
@@ -339,6 +363,13 @@ void auditLayout(const FontStack &fonts)
     checkClearance(c, Font::Body, geo::kFieldTextSize, "jean-françois",
                    geo::fieldTextBaseline(geo::kUserFieldY), geo::kLabelSize, "Password",
                    geo::kPassLabelBaselineY, "username field text vs password label");
+    checkClearance(c, Font::Body, geo::kFieldTextSize, "pässwörd-gypq",
+                   geo::fieldTextBaseline(geo::kPassFieldY), geo::kCheckLabelSize,
+                   "Log in automatically", geo::kCheckLabelBaselineY,
+                   "password field text vs the checkbox label");
+    checkClearance(c, Font::Body, geo::kCheckLabelSize, "Log in automatically",
+                   geo::kCheckLabelBaselineY, geo::kStatusSize, "Takes effect when you log in",
+                   geo::kStatusBaselineY, "checkbox label vs status line");
     checkClearance(c, Font::Body, geo::kStatusSize,
                    "Your account has expired; please contact your system administrator",
                    geo::kStatusBaselineY, geo::kButtonTextSize, "Log in",

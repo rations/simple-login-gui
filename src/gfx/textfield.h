@@ -103,6 +103,11 @@ public:
     // typed after a longer one would otherwise leave the tail of the first one behind.
     void clear();
 
+    // Replace the contents, caret at the end. For putting a known value in a field -- the
+    // automatic login's username -- not for anything typed. Goes through the same byte filter
+    // and capacity check as a keystroke, so it cannot put in what typing could not.
+    void setText(const char *utf8);
+
     //--- input ---------------------------------------------------------
     // One keystroke. `utf8`/`len` is what the input method produced, which may be empty, and
     // may be several bytes or even several characters after a Compose sequence. Returns true if

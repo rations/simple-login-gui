@@ -14,6 +14,9 @@ echo "Removing binaries, fonts and config..."
 rm -f /usr/local/bin/xlogin
 rm -f /usr/local/bin/xlogin-launcher
 rm -f /etc/pam.d/xlogin
+rm -f /etc/pam.d/xlogin-autologin
+# The once-per-boot automatic-login marker. On a tmpfs, so a reboot would clear it anyway.
+rm -f /run/xlogin-autologin
 rm -f /etc/polkit-1/rules.d/10-local.rules
 
 # /etc/xlogin.conf is backed up before it goes. XSERVER_FLAGS in it may have taken

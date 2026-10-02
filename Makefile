@@ -17,7 +17,7 @@ CXX     ?= g++
 # XLOGIN_CONFIG_PATH are baked in at compile time, so a binary is only correct at the prefix it
 # was built for -- which is why the release archive is an absolute tree unpacked at / rather
 # than something relocatable. Change it here and rebuild; do not move the files afterwards.
-VERSION     ?= 1.0.4
+VERSION     ?= 1.0.5
 
 PREFIX      ?= /usr/local
 BINDIR      ?= $(PREFIX)/bin
@@ -141,6 +141,7 @@ install: xlogin
 	chmod 755 $(DESTDIR)$(BINDIR)/xlogin-launcher
 	install -d $(DESTDIR)$(SYSCONFDIR)/pam.d
 	install -m 644 pam.d/xlogin              $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin
+	install -m 644 pam.d/xlogin-autologin    $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin-autologin
 	install -d $(DESTDIR)$(SYSCONFDIR)/init.d
 	sed 's|/usr/local/bin/xlogin-launcher|$(BINDIR)/xlogin-launcher|g' etc_init.d_xlogin-launcher > $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
 	chmod 755 $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
@@ -171,7 +172,7 @@ install: xlogin
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/xlogin $(DESTDIR)$(BINDIR)/xlogin-launcher
-	rm -f $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin
+	rm -f $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin $(DESTDIR)$(SYSCONFDIR)/pam.d/xlogin-autologin
 	rm -f $(DESTDIR)$(SYSCONFDIR)/init.d/xlogin-launcher
 # /etc/xlogin.conf is deliberately left: it holds XSERVER_FLAGS, which somebody may have had
 # to work out for their GPU, and removing a binary is not a reason to throw that away.

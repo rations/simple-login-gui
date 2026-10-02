@@ -1,0 +1,15 @@
+# PAM configuration for xlogin's automatic login
+# Used only when /etc/xlogin.conf names a user in XLOGIN_AUTOLOGIN, and only
+# once per boot. That user turned automatic login on from the login screen,
+# AFTER logging in with their password through the xlogin stack.
+#
+# The ONLY difference from the xlogin stack is the auth line: no password is
+# asked for. pam_permit and pam_unix both come from libpam-modules. Account
+# checks still run, so an expired or locked account is refused here exactly as
+# it would be at the password prompt. The session lines are unchanged, so the
+# realtime limits (pam_limits) and seat registration (pam_elogind) still apply.
+auth     required    pam_permit.so
+account  required    pam_unix.so
+session  required    pam_unix.so
+session  optional    pam_limits.so
+session  optional    pam_elogind.so

@@ -58,6 +58,13 @@ void Panel::layout(const Rect &screen, const Rect &primary)
     mPass.configure(Rect(px + geo::kFieldX, py + geo::kPassFieldY, geo::kFieldW, geo::kFieldH),
                     "password", true);
 
+    mAuto.box = Rect(px + geo::kCheckX, py + geo::kCheckY, geo::kCheckBox, geo::kCheckBox);
+    mAuto.hitRect =
+        Rect(px + geo::kCheckX, py + geo::kCheckHitTop, geo::kCheckHitW, geo::kCheckHitH);
+    mAuto.label = "Log in automatically";
+    mAuto.labelX = px + geo::kCheckLabelX;
+    mAuto.labelBaseline = py + geo::kCheckLabelBaselineY;
+
     mLogin.rect = Rect(px + geo::kLoginX, py + geo::kButtonY, geo::kLoginW, geo::kButtonH);
     mLogin.label = "Log in";
     mLogin.accent = true;
@@ -103,6 +110,9 @@ void Panel::setEnabled(bool e)
     mEnabled = e;
     mUser.setEnabled(e);
     mPass.setEnabled(e);
+    mAuto.enabled = e;
+    if (!e)
+        mAuto.hovered = false;
     mLogin.enabled = e;
     // mOptions stays enabled. If authentication has hung, the Options menu is the only way off
     // this screen, so it is the one control that is never disabled.
@@ -131,8 +141,8 @@ void Panel::setFocus(Focus f)
 // would spin forever on a panel where nothing was.
 void Panel::focusNext(int delta)
 {
-    const Focus ring[] = {Focus::User, Focus::Pass, Focus::Options, Focus::Login};
-    const int n = 4;
+    const Focus ring[] = {Focus::User, Focus::Pass, Focus::Autologin, Focus::Options, Focus::Login};
+    const int n = 5;
 
     int at = 0;
     for (int i = 0; i < n; ++i) {
@@ -144,6 +154,7 @@ void Panel::focusNext(int delta)
         at = (at + delta + n) % n;
         const Focus f = ring[at];
         const bool usable = (f == Focus::User || f == Focus::Pass) ? mEnabled
+                            : (f == Focus::Autologin)              ? mAuto.enabled
                             : (f == Focus::Login)                  ? mLogin.enabled
                                                                    : mOptions.enabled;
         if (usable) {
@@ -151,6 +162,15 @@ void Panel::focusNext(int delta)
             return;
         }
     }
+}
+
+void Panel::toggleAutologin()
+{
+    if (!mAuto.enabled)
+        return;
+    mAuto.checked = !mAuto.checked;
+    if (cb.autologinToggled)
+        cb.autologinToggled(mAuto.checked);
 }
 
 //------------------------------------------------------------------------
@@ -162,6 +182,7 @@ void Panel::motion(float x, float y)
         // covers it reads as the menu being transparent to the pointer, which it is not.
         mUser.setHovered(false);
         mPass.setHovered(false);
+        mAuto.hovered = false;
         mLogin.hovered = false;
         mOptions.hovered = false;
         return;
@@ -169,6 +190,7 @@ void Panel::motion(float x, float y)
 
     mUser.setHovered(mUser.rect().contains(x, y));
     mPass.setHovered(mPass.rect().contains(x, y));
+    mAuto.hovered = mAuto.hit(x, y);
     mLogin.hovered = mLogin.enabled && mLogin.rect.contains(x, y);
     mOptions.hovered = mOptions.enabled && mOptions.rect.contains(x, y);
 }
@@ -194,6 +216,8 @@ Panel::Target Panel::targetAt(float x, float y, int &row) const
         return Target::User;
     if (mPass.enabled() && mPass.rect().contains(x, y))
         return Target::Pass;
+    if (mAuto.hit(x, y))
+        return Target::Autologin;
     return Target::Nothing;
 }
 
@@ -253,6 +277,11 @@ void Panel::click(float x, float y, bool pressed)
             mPass.handleClick(x, y);
             return;
 
+        case Target::Autologin:
+            setFocus(Focus::Autologin);
+            toggleAutologin();
+            return;
+
         case Target::Nothing:
             return;
     }
@@ -282,6 +311,14 @@ void Panel::key(Key k, const char *utf8, int len)
     // The focused field gets first refusal and consumes everything that is editing or text.
     if (mUser.handleKey(k, utf8, len) || mPass.handleKey(k, utf8, len))
         return;
+
+    // Space toggles the box, as it does every checkbox. Space arrives as text with no editing
+    // meaning, so it is recognised by its byte; the fields have already declined it above,
+    // because neither of them has the focus.
+    if (mFocus == Focus::Autologin && k == Key::Plain && len == 1 && utf8 && utf8[0] == ' ') {
+        toggleAutologin();
+        return;
+    }
 
     switch (k) {
         case Key::Tab:
@@ -381,6 +418,11 @@ void Panel::draw(Canvas &c) const
 
     mUser.draw(c);
     mPass.draw(c);
+
+    // Focus is drawn the way it is on a button: as though hovered.
+    Checkbox autologin = mAuto;
+    autologin.hovered = autologin.hovered || (mFocus == Focus::Autologin && autologin.enabled);
+    autologin.draw(c);
 
     // The status line. One line, clipped: it carries pam_strerror's text, which is not written
     // to a width, and a message that wraps out of the panel is worse than one with an ellipsis.

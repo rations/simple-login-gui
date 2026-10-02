@@ -5,6 +5,7 @@
 
 #include <security/pam_appl.h>
 
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,10 @@ static char g_message[256];
 
 /* What the conversation function answers with. Both are borrowed for the duration of one
  * auth_login() call and are not owned here -- in particular `password` points into the text
- * field's fixed buffer, which the caller erases. */
+ * field's fixed buffer, which the caller erases. `password` is NULL for an automatic login, and
+ * a module that asks for one then is answered with a conversation error, not an empty string:
+ * the xlogin-autologin stack is not supposed to ask, and if somebody has edited it so that it
+ * does, failing is the answer that does not let an empty password through. */
 struct conv_data {
     const char *user;
     const char *password;
@@ -69,7 +73,9 @@ static int conversation(int num_msg, const struct pam_message **msg, struct pam_
     for (i = 0; i < num_msg; i++) {
         switch (msg[i]->msg_style) {
             case PAM_PROMPT_ECHO_OFF:
-                out[i].resp = strdup(data->password ? data->password : "");
+                if (!data->password)
+                    goto conv_error;
+                out[i].resp = strdup(data->password);
                 break;
             case PAM_PROMPT_ECHO_ON:
                 out[i].resp = strdup(data->user ? data->user : "");
@@ -112,7 +118,12 @@ int auth_session_open(void)
     return g_pamh != NULL;
 }
 
-auth_result auth_login(const char *user, const char *password)
+/* The one path into a PAM session. auth_login() and auth_autologin() differ only in which
+ * service they name and whether pam_authenticate runs, so everything else -- the account
+ * check, the credentials and the obligation that comes with them, the seat environment, the
+ * failure path -- is this code, once, rather than two copies that can drift apart. */
+static auth_result auth_begin(const char *service, const char *user, const char *password,
+                              int do_auth)
 {
     auth_result r;
     struct conv_data data;
@@ -126,7 +137,7 @@ auth_result auth_login(const char *user, const char *password)
     r.message = g_message;
     g_message[0] = '\0';
 
-    if (!user || !*user || !password) {
+    if (!user || !*user || (do_auth && !password)) {
         snprintf(g_message, sizeof(g_message), "Enter a username and password");
         return r;
     }
@@ -143,7 +154,7 @@ auth_result auth_login(const char *user, const char *password)
     conv.conv = conversation;
     conv.appdata_ptr = &data;
 
-    ret = pam_start("xlogin", user, &conv, &g_pamh);
+    ret = pam_start(service, user, &conv, &g_pamh);
     if (ret != PAM_SUCCESS) {
         /* pam_start failing means there is no handle, so pam_strerror gets NULL -- which it
          * accepts, falling back to the generic text for the code. */
@@ -153,9 +164,14 @@ auth_result auth_login(const char *user, const char *password)
         return r;
     }
 
-    ret = pam_authenticate(g_pamh, flags);
-    if (ret != PAM_SUCCESS)
-        goto fail;
+    /* Skipped ONLY for an automatic login, whose stack is xlogin-autologin and whose user is
+     * one who authenticated through the xlogin stack when they turned it on. The account
+     * check below is NOT skipped: an expired or locked account is refused here too. */
+    if (do_auth) {
+        ret = pam_authenticate(g_pamh, flags);
+        if (ret != PAM_SUCCESS)
+            goto fail;
+    }
 
     ret = pam_acct_mgmt(g_pamh, flags);
     if (ret != PAM_SUCCESS)
@@ -204,6 +220,36 @@ fail:
     pam_end(g_pamh, ret);
     g_pamh = NULL;
     return r;
+}
+
+auth_result auth_login(const char *user, const char *password)
+{
+    return auth_begin("xlogin", user, password, 1);
+}
+
+auth_result auth_autologin(const char *user)
+{
+    auth_result r;
+    const struct passwd *pw;
+
+    r.ok = 0;
+    r.code = PAM_USER_UNKNOWN; /* cites: security/_pam_types.h:43 */
+    r.message = g_message;
+
+    /* Refused before PAM is even started. The caller has already checked both, but this is the
+     * function that skips the password, so it is the one that must not trust that it was. */
+    pw = user && *user ? getpwnam(user) : NULL;
+    if (!pw) {
+        snprintf(g_message, sizeof(g_message), "Automatic login: user not found");
+        return r;
+    }
+    if (pw->pw_uid == 0) {
+        snprintf(g_message, sizeof(g_message), "Automatic login is not allowed for root");
+        r.code = PAM_PERM_DENIED; /* cites: security/_pam_types.h:36 */
+        return r;
+    }
+
+    return auth_begin("xlogin-autologin", user, NULL, 0);
 }
 
 void auth_close_session(void)

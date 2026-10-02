@@ -5,7 +5,8 @@ with one fullscreen window, authenticates with PAM, drops privileges properly an
 `~/.xinitrc`. On logout the login screen comes back.
 
 No GTK, no Qt, no GLib, no systemd, no display-manager framework. The window is drawn by hand with
-**Cairo and FreeType** on plain Xlib. One binary, one PAM stack, one init script.
+**Cairo and FreeType** on plain Xlib. One binary, two PAM stacks (the second for automatic
+login), one init script.
 
 Works with **seatd alone**. elogind is optional. ConsoleKit2 is not required.
 
@@ -22,9 +23,15 @@ Devuan Excalibur with seatd and no elogind has no login manager that is not eith
 
 ## What is on the screen
 
-A centred panel with a username field, a password field and two buttons.
+A centred panel with a username field, a password field, a **Log in automatically** checkbox and
+two buttons.
 
 **Log in** authenticates and starts your session.
+
+**Log in automatically** makes the machine boot straight to your desktop, without asking for a
+password. Tick it, then log in as usual: it is saved for the account you log in as, and only
+once that login has succeeded. Untick it to turn it off; that is saved at once, with no login
+needed. See [Automatic login](#automatic-login).
 
 **Options** opens a menu:
 
@@ -36,7 +43,7 @@ A centred panel with a username field, a password field and two buttons.
 | **Shut down** | Powers off. Asks for a second click first. |
 
 Everything works from the keyboard as well as the pointer: `Tab` moves username → password →
-Options → Log in, `Return` activates, and inside the menu the arrow keys move, `Return` chooses and
+Log in automatically → Options → Log in, `Space` ticks the box, `Return` activates, and inside the menu the arrow keys move, `Return` chooses and
 `Escape` backs out. That is deliberate — the Options menu is this screen's way out, and a way out
 you can only reach with a mouse is no use to somebody whose mouse is the reason they want a
 console.
@@ -115,7 +122,7 @@ cd simple-login-gui-1.0.4-x86_64
 sudo ./install.sh
 ```
 
-The archive holds the installed tree — the binary, the launcher, the PAM stack, the init script,
+The archive holds the installed tree — the binary, the launcher, the PAM stacks, the init script,
 the polkit rules and the fonts — plus `install.sh`, `uninstall.sh` and these documents. No
 sources and no build system; nothing is compiled on your machine.
 
@@ -137,7 +144,7 @@ and then:
 - Detects your GPU driver and writes `/etc/xlogin.conf` with the right X server flags
 - Checks `/etc/inittab` for a getty to use as the Console target, and warns if there is not one
 - Installs the dependencies and builds from source
-- Runs `make install`: the binary, the launcher, the PAM stack, the init script, the polkit rules,
+- Runs `make install`: the binary, the launcher, the PAM stacks, the init script, the polkit rules,
   the two bundled fonts and the backgrounds directory
 - Enables seatd at boot
 - Adds the user to `input`, `video` and `plugdev`
@@ -191,6 +198,7 @@ plain `KEY='value'`.
 | `XLOGIN_CONSOLE_VT` | The VT that Options → Console switches to. Default `2`. There must be a getty on it. |
 | `XLOGIN_BACKGROUND` | A **filename** inside the backgrounds directory, or empty. Not a path. |
 | `XLOGIN_BG_MODE` | `fill` (default), `fit`, `center`, `stretch` or `tile`. |
+| `XLOGIN_AUTOLOGIN` | The user to log in automatically at boot, or empty for off. Set from the login screen. |
 
 xlogin rewrites single keys **in place** and leaves everything else alone, so comments and any
 keys you add by hand survive being changed from the Options menu. Writes go through a temp file
@@ -214,6 +222,39 @@ does not matter. An image that will not decode is skipped and the plain backgrou
 login screen never fails to appear because of a picture.
 
 There is no file browser, and there will not be one. See [Threat model](#threat-model).
+
+### Automatic login
+
+Tick **Log in automatically** on the login screen and log in. From the next boot, the login
+screen shows
+
+```
+Logging in as alice in 3s - press any key to cancel
+```
+
+and then starts your session without asking for a password. Pressing any key or clicking during
+those three seconds cancels it **for that boot only**. You get the ordinary login screen and
+the setting is left as it was.
+
+It happens **once per boot**. Logging out brings back the ordinary login screen, with the box
+still ticked, so that is where you untick it. If the session crashes the X server and the
+login screen restarts, it does not log in again until the next reboot. A session that kept
+crashing would otherwise loop.
+
+**To turn it off**, untick the box on the login screen; that is saved straight away. From a text
+console instead (`Ctrl+Alt+F2`):
+
+```sh
+sudo sed -i "s/^XLOGIN_AUTOLOGIN=.*/XLOGIN_AUTOLOGIN=''/" /etc/xlogin.conf
+```
+
+It is never done for root, for an account that no longer exists, or for an account that is
+expired or locked; any of those gives the ordinary login screen and a line in the system log.
+It is also ignored unless `/etc/xlogin.conf` is owned by root and writable by nobody else. The
+installer sets that. Re-running the installer keeps the setting.
+
+Read [Automatic login and who can turn it on](#automatic-login-and-who-can-turn-it-on) before using
+it on a machine anyone else can reach.
 
 ---
 
@@ -260,7 +301,7 @@ sudo telinit q
 sudo ./uninstall.sh
 ```
 
-Removes the binary, the launcher, the PAM stack, the init script, the polkit rules and the bundled
+Removes the binary, the launcher, the PAM stacks, the init script, the polkit rules and the bundled
 fonts; restores the tty1 getty in `/etc/inittab`; and backs `/etc/xlogin.conf` up beside itself
 before deleting it. If you have background images installed it asks before deleting them.
 
@@ -330,7 +371,7 @@ only ever sees root-owned files, and that the build turns on everything the tool
 ### What an unauthenticated person at the keyboard can do
 
 Everything in the Options menu: **switch to a text console, reboot the machine, power it off, and
-change the login background**.
+change the login background**. They can also **turn automatic login off**, but not on (see below).
 
 This is deliberate. Somebody standing at the machine can already hold the power button in, so
 refusing them a Shut down entry buys nothing and costs them a clean unmount. Restart and Shut down
@@ -345,6 +386,35 @@ They can also read the machine's hostname, which is shown on the panel.
 They **cannot** enumerate the filesystem. The background picker lists exactly one directory,
 `/usr/local/share/xlogin/backgrounds`, and there is no way to type a path anywhere in the
 interface. A file browser was considered and rejected for precisely this reason.
+
+### Automatic login and who can turn it on
+
+Automatic login means **anybody who switches the machine on gets that user's desktop**, with
+everything the user can reach from it. That is what the feature is for, on a single-user audio
+machine in somebody's studio. It is the wrong choice for a laptop that leaves the house or a
+machine other people can sit at.
+
+What is done about it:
+
+- **Turning it on requires the password.** Ticking the box writes nothing. The setting is saved
+  only after a login with a password succeeds, and only for the account that logged in. Somebody
+  at the login screen cannot turn on automatic login for an account whose password they do not
+  have. If they have the password, they could already log in.
+- **Turning it off does not.** Unticking the box is saved straight away, because it only takes
+  access away.
+- **Never for root.** The login screen refuses to save it, and refuses to act on it if
+  `/etc/xlogin.conf` is edited by hand.
+- **The account is still checked.** Automatic login goes through its own PAM service,
+  `/etc/pam.d/xlogin-autologin`. That stack differs from `/etc/pam.d/xlogin` only in its `auth`
+  line, which is `pam_permit`. The `account` line still runs `pam_unix`, so an expired or locked
+  account is refused. The session lines are the same, so limits and seat registration still
+  apply.
+- **Only from a file only root can write.** `XLOGIN_AUTOLOGIN` is ignored unless
+  `/etc/xlogin.conf` is a regular file owned by root and not group- or world-writable. The value
+  must also be a plain account name, or it is ignored too.
+- **Once per boot**, enforced by a marker in `/run`, which is a tmpfs and cleared at every boot.
+  The marker is created before the countdown starts. If it cannot be created, automatic login is
+  skipped rather than risked.
 
 ### What is done about the password
 
@@ -422,6 +492,8 @@ A decoder is a parser and this one runs as root before anybody has authenticated
   `pam_faillock` or `pam_tally2` in `/etc/pam.d/xlogin` if you want it.
 - The screen is not a lock screen. It does not protect a running session; it is what you see when
   there is not one.
+- Automatic login is not protected against anybody at the machine in the three seconds before it
+  runs, or after it has run. That is what it does.
 - No attempt is made to prevent a root user from doing anything. Everyone who can write to
   `/usr/local/share/xlogin/backgrounds` or `/etc/xlogin.conf` is already root and can already do
   worse.

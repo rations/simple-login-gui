@@ -128,20 +128,28 @@ fi
 
 # ── Write /etc/xlogin.conf, PRESERVING anything already set ───────────────────
 # The login screen writes XLOGIN_BACKGROUND here itself when somebody picks a
-# background from the Options menu. Re-running the installer must not throw that
-# away, so existing xlogin settings are read back before the file is rewritten.
+# background from the Options menu, and XLOGIN_AUTOLOGIN when somebody ticks
+# "Log in automatically" and then logs in. Re-running the installer must not throw
+# those away, so existing xlogin settings are read back before the file is rewritten.
 OLD_BACKGROUND=""
 OLD_BG_MODE=""
 OLD_CONSOLE_VT=""
+OLD_AUTOLOGIN=""
 if [ -f /etc/xlogin.conf ]; then
     # shellcheck disable=SC1091
     OLD_BACKGROUND=$(sh -c '. /etc/xlogin.conf 2>/dev/null; printf "%s" "${XLOGIN_BACKGROUND:-}"')
     OLD_BG_MODE=$(sh -c '. /etc/xlogin.conf 2>/dev/null; printf "%s" "${XLOGIN_BG_MODE:-}"')
     OLD_CONSOLE_VT=$(sh -c '. /etc/xlogin.conf 2>/dev/null; printf "%s" "${XLOGIN_CONSOLE_VT:-}"')
+    OLD_AUTOLOGIN=$(sh -c '. /etc/xlogin.conf 2>/dev/null; printf "%s" "${XLOGIN_AUTOLOGIN:-}"')
     cp /etc/xlogin.conf "/etc/xlogin.conf.backup.$(date +%Y%m%d_%H%M%S)"
 fi
 [ -n "$OLD_CONSOLE_VT" ] && CONSOLE_VT="$OLD_CONSOLE_VT"
 [ -z "$OLD_BG_MODE" ] && OLD_BG_MODE="fill"
+# Only a plain account name is carried over. xlogin itself ignores anything else,
+# and this value is about to be written into a file that is sourced as root.
+case "$OLD_AUTOLOGIN" in
+    *[!A-Za-z0-9_\$-]*) OLD_AUTOLOGIN="" ;;
+esac
 
 cat > /etc/xlogin.conf <<EOF
 # xlogin configuration.
@@ -164,8 +172,22 @@ XLOGIN_BACKGROUND='$OLD_BACKGROUND'
 
 # fill | fit | center | stretch | tile
 XLOGIN_BG_MODE='$OLD_BG_MODE'
+
+# Log this user in without a password, once per boot, or empty for off. Set by
+# ticking "Log in automatically" on the login screen and then logging in as that
+# user; unticking the box clears it. Only honoured while this file is owned by
+# root and writable by nobody else.
+XLOGIN_AUTOLOGIN='$OLD_AUTOLOGIN'
 EOF
+# Owned by root and writable only by root, explicitly rather than by whatever the
+# umask happened to be: xlogin ignores XLOGIN_AUTOLOGIN in a file anyone else
+# could have written.
+chown root:root /etc/xlogin.conf
+chmod 0644 /etc/xlogin.conf
 echo "  Wrote /etc/xlogin.conf (Console will use tty${CONSOLE_VT})"
+if [ -n "$OLD_AUTOLOGIN" ]; then
+    echo "  Kept automatic login for $OLD_AUTOLOGIN (untick it on the login screen to turn it off)"
+fi
 echo
 
 # ── Runtime dependencies ──────────────────────────────────────────────────────

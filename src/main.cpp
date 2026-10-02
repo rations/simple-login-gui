@@ -8,6 +8,12 @@
 //                              |
 //                              +--fail--> Idle, with a message
 //
+// and, at most once per boot, one step in front of it:
+//
+//     Counting down  --3 s-->  auto-login  --ok-->  Session running
+//          |                       |
+//          +--any key or click-->  +--fail-->  Idle, with a message
+//
 // WHAT IS DONE BEFORE ANYTHING ELSE, AND WHY IT IS FIRST:
 //
 //   * prctl(PR_SET_DUMPABLE, 0). This process is root and will hold a plaintext password. A
@@ -44,6 +50,7 @@ extern "C" {
 #include <X11/Xlib.h>
 
 #include <fcntl.h>
+#include <pwd.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
 #include <syslog.h>
@@ -54,6 +61,7 @@ extern "C" {
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -109,6 +117,36 @@ bool installSignalHandlers()
 }
 
 //------------------------------------------------------------------------
+// Automatic login.
+//
+// THE MARKER IS WHAT MAKES IT ONCE PER BOOT. /run is a tmpfs, mounted fresh at every boot by
+// initscripts' mountkernfs.sh, so a file there exists from the first automatic login until the
+// machine restarts. That gives the two properties this needs:
+//   * Logging out comes back to the login screen, where the box can be unticked, instead of
+//     logging straight back in -- which would be a desktop nobody could ever leave.
+//   * If the session takes the X server down with it, inittab respawns the launcher, and the
+//     login screen that comes back does NOT log in again. Without that, a session that crashes
+//     X loops until init decides tty1 is "respawning too fast" and stops starting it -- which
+//     is no login screen at all, the one outcome this program must never produce.
+// O_EXCL makes creating it and checking for it one step, and O_NOFOLLOW refuses a symlink
+// planted in its place. If it cannot be created for any other reason, the automatic login is
+// SKIPPED: a login screen is the safe failure, a loop is not.
+constexpr const char *kAutologinMarker = "/run/xlogin-autologin";
+
+// Long enough to read the line and reach a key, short enough that nobody waits for it. Chosen
+// by the author; checked four times a second by the 250 ms tick, so the visible count is
+// never more than a quarter of a second stale.
+constexpr long kAutologinDelayMs = 3000;
+
+long monotonicMs()
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return static_cast<long>(ts.tv_sec) * 1000L + ts.tv_nsec / 1000000L;
+}
+
+//------------------------------------------------------------------------
 std::string hostName()
 {
     char buf[256];
@@ -139,6 +177,10 @@ public:
         mPanel.cb.submit = [this] { submit(); };
         mPanel.cb.options = [this] { options(); };
         mPanel.cb.menuAction = [this](const MenuItem &item) { menuAction(item); };
+        mPanel.cb.autologinToggled = [this](bool on) { autologinToggled(on); };
+
+        mPanel.setAutologinChecked(mCfg.autologin[0] != '\0');
+        armAutologin();
 
         // Warn once, at startup, rather than at the moment somebody needs the console: a VT
         // with no getty on it shows a black screen with a cursor, which reads as a crash.
@@ -191,6 +233,8 @@ public:
     // single non-blocking attempt four times a second costs nothing.
     void tick()
     {
+        if (mCountdown)
+            tickCountdown();
         if (mSessionPid > 0 || mWin.keyboardGrabbed())
             return;
         if (mWin.tryGrabKeyboard())
@@ -201,6 +245,14 @@ public:
     {
         if (mSessionPid > 0)
             return; // the panel is not on the screen; nothing here is clickable
+        if (mCountdown) {
+            // Any click cancels, and the click is spent doing it: it does not also press
+            // whatever it landed on.
+            if (pressed)
+                cancelAutologin();
+            mWin.invalidate();
+            return;
+        }
         mPanel.click(x, y, pressed);
         mWin.invalidate();
     }
@@ -209,6 +261,13 @@ public:
     {
         if (mSessionPid > 0)
             return false;
+        if (mCountdown) {
+            // Any key cancels, and is spent doing it -- so a key pressed to stop the login is
+            // not also the first character of a username.
+            cancelAutologin();
+            mWin.invalidate();
+            return true;
+        }
         mPanel.key(keyFromSym(sym), text, len);
         mWin.invalidate();
         return true;
@@ -273,6 +332,9 @@ private:
 
         if (!r.ok) {
             syslog(LOG_AUTHPRIV | LOG_NOTICE, "authentication failed for user %s", mUser.c_str());
+            // Nothing about automatic login is written on this path. Ticking the box is a
+            // request; this is the point it is refused, because the person who ticked it has
+            // not proved they are the account it would apply to.
             // pam_strerror's text and nothing more. Which of the username and the password was
             // wrong is not something to tell somebody who has not proved who they are.
             mPanel.setStatus(r.message, true);
@@ -281,6 +343,7 @@ private:
             return;
         }
 
+        saveAutologinChoice();
         startSession();
     }
 
@@ -301,6 +364,7 @@ private:
             auth_close_session();
             mWin.show();
             mWin.grabKeyboard();
+            mPanel.setAutologinChecked(mCfg.autologin[0] != '\0');
             mPanel.setEnabled(true);
             mPanel.setStatus(lr.message, true);
             mWin.invalidate();
@@ -343,7 +407,163 @@ private:
         mWin.show();
         mWin.grabKeyboard();
         mPanel.reset();
+        // The box shows what is SAVED, not what was ticked before the session: if saving was
+        // refused (root) or failed, the screen that comes back must not claim otherwise.
+        mPanel.setAutologinChecked(mCfg.autologin[0] != '\0');
         mWin.invalidate();
+    }
+
+    //--- automatic login -----------------------------------------------
+    // At startup: start the countdown if a user is configured and this boot has not had its
+    // automatic login yet. Everything that stops it falls back to the ordinary login screen,
+    // which is already up -- this runs after the window has opened, so there is no failure
+    // here that leaves nothing on the screen.
+    void armAutologin()
+    {
+        if (!mCfg.autologin[0])
+            return;
+
+        // config_load has already refused a name that is not a valid username or that came
+        // from a file someone other than root could write. These two are about the account.
+        const struct passwd *pw = getpwnam(mCfg.autologin);
+        if (!pw) {
+            syslog(LOG_AUTHPRIV | LOG_WARNING,
+                   "automatic login: user %s does not exist; showing the login screen",
+                   mCfg.autologin);
+            return;
+        }
+        if (pw->pw_uid == 0) {
+            syslog(LOG_AUTHPRIV | LOG_WARNING,
+                   "automatic login refused for %s: uid 0; showing the login screen",
+                   mCfg.autologin);
+            return;
+        }
+
+        const int fd =
+            open(kAutologinMarker, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (fd < 0) {
+            if (errno == EEXIST) {
+                syslog(LOG_AUTHPRIV | LOG_INFO,
+                       "automatic login already happened this boot; showing the login screen");
+            } else {
+                syslog(LOG_AUTHPRIV | LOG_ERR, "automatic login skipped: could not create %s: %s",
+                       kAutologinMarker, strerror(errno));
+            }
+            return;
+        }
+        if (close(fd) != 0) {
+            syslog(LOG_AUTHPRIV | LOG_WARNING, "could not close %s: %s", kAutologinMarker,
+                   strerror(errno));
+        }
+
+        mPanel.username().setText(mCfg.autologin);
+        mPanel.setEnabled(false);
+        mCountdown = true;
+        mCountdownDeadline = monotonicMs() + kAutologinDelayMs;
+        showCountdown();
+    }
+
+    void showCountdown()
+    {
+        const long left = mCountdownDeadline - monotonicMs();
+        const long secs = left <= 0 ? 0 : (left + 999) / 1000;
+        mPanel.setStatus("Logging in as " + std::string(mCfg.autologin) + " in " +
+                             std::to_string(secs) + "s - press any key to cancel",
+                         false);
+        mWin.invalidate();
+    }
+
+    void tickCountdown()
+    {
+        if (monotonicMs() < mCountdownDeadline) {
+            showCountdown();
+            return;
+        }
+        mCountdown = false;
+        autologin();
+    }
+
+    void cancelAutologin()
+    {
+        mCountdown = false;
+        // reset() keeps the username, so the person who cancelled has only the password left
+        // to type if it was them -- and can clear the name with Escape if it was not.
+        mPanel.reset();
+        mPanel.setStatus("Automatic login cancelled", false);
+        syslog(LOG_AUTHPRIV | LOG_INFO, "automatic login for %s cancelled at the keyboard",
+               mCfg.autologin);
+    }
+
+    void autologin()
+    {
+        mUser = mCfg.autologin;
+        mPanel.setStatus("Logging in as " + mUser + "...", false);
+        mWin.paintNow();
+
+        const auth_result r = auth_autologin(mUser.c_str());
+        if (!r.ok) {
+            // PAM's reason goes to syslog, and the screen says only that it did not work: an
+            // expired or locked account is not something to announce to whoever is in the room.
+            syslog(LOG_AUTHPRIV | LOG_WARNING, "automatic login for %s failed: %s", mUser.c_str(),
+                   r.message);
+            mPanel.reset();
+            mPanel.setStatus("Automatic login failed; log in below", true);
+            mWin.invalidate();
+            return;
+        }
+
+        syslog(LOG_AUTHPRIV | LOG_INFO, "automatic login for %s", mUser.c_str());
+        startSession();
+    }
+
+    // The box was clicked. Ticking writes NOTHING: it is a request, honoured only once a login
+    // with a password succeeds, because nobody at this screen has proved who they are yet.
+    // Unticking writes at once, because it only takes access away, and somebody who has just
+    // turned automatic login off should not have to log in for that to stick.
+    void autologinToggled(bool on)
+    {
+        if (on) {
+            mPanel.setStatus("Takes effect when you log in", false);
+        } else if (mCfg.autologin[0]) {
+            if (config_set("XLOGIN_AUTOLOGIN", "") == 0) {
+                syslog(LOG_AUTHPRIV | LOG_NOTICE, "automatic login for %s turned off",
+                       mCfg.autologin);
+                mCfg.autologin[0] = '\0';
+                mPanel.setStatus("Automatic login turned off", false);
+            } else {
+                // Put the tick back: the box must not say off while the file says on.
+                mPanel.setAutologinChecked(true);
+                mPanel.setStatus("Could not save; automatic login is still on", true);
+            }
+        } else {
+            mPanel.clearStatus();
+        }
+        mWin.invalidate();
+    }
+
+    // After a SUCCESSFUL password login, and before the session starts. A failure here is
+    // logged and does not stop the login: it is a setting, and the person has just proved who
+    // they are and is waiting for their desktop.
+    void saveAutologinChoice()
+    {
+        if (!mPanel.autologinChecked() || mUser == mCfg.autologin)
+            return;
+
+        // Unticking has already been written by autologinToggled, so the only case left is
+        // ticked-and-different: turn it on for this user, or move it from someone else.
+        const struct passwd *pw = getpwnam(mUser.c_str());
+        if (!pw || pw->pw_uid == 0 || !config_valid_username(mUser.c_str())) {
+            syslog(LOG_AUTHPRIV | LOG_WARNING, "automatic login not enabled for %s: %s",
+                   mUser.c_str(),
+                   pw && pw->pw_uid == 0 ? "not allowed for root" : "not a usable account name");
+            return;
+        }
+        if (config_set("XLOGIN_AUTOLOGIN", mUser.c_str()) != 0) {
+            syslog(LOG_AUTHPRIV | LOG_ERR, "could not save automatic login for %s", mUser.c_str());
+            return;
+        }
+        snprintf(mCfg.autologin, sizeof(mCfg.autologin), "%s", mUser.c_str());
+        syslog(LOG_AUTHPRIV | LOG_NOTICE, "automatic login turned on for %s", mUser.c_str());
     }
 
     //--- the Options menu ----------------------------------------------
@@ -544,6 +764,8 @@ private:
     cairo_surface_t *mBackground = nullptr;
     std::string mUser;
     pid_t mSessionPid = -1;
+    bool mCountdown = false;
+    long mCountdownDeadline = 0;
 };
 
 } // namespace

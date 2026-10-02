@@ -38,6 +38,11 @@ typedef struct {
     /* The VT the Console entry switches to. 1..63 (MIN_NR_CONSOLES..MAX_NR_CONSOLES,
      * cites: linux/vt.h:10-11). Default 2, which is where the first getty respawns. */
     int console_vt;
+    /* The user to log in without a password, once per boot, or empty for none. Only ever
+     * written by the login screen AFTER that user has authenticated, and only honoured when
+     * the file is owned by root and writable by nobody else -- see config_load. Always a name
+     * that passed config_valid_username, never anything else. */
+    char autologin[XLOGIN_CFG_VALUE_MAX];
 } xlogin_config;
 
 void config_defaults(xlogin_config *c);
@@ -49,6 +54,13 @@ void config_load(xlogin_config *c);
  * Returns -1 without touching the file if `value` cannot be safely single-quoted, and -2 if
  * the file could not be written. */
 int config_set(const char *key, const char *value);
+
+/* Non-zero if `name` is an account name useradd(8) would create: letters, digits, underscores
+ * and dashes, not starting with a dash, optionally ending in `$`, not entirely digits, and
+ * shorter than LOGIN_NAME_MAX (cites: useradd(8) CAVEATS; bits/local_lim.h:90). A name outside
+ * that is not written to a file the launcher sources as root, and is not honoured when read
+ * back from one. */
+int config_valid_username(const char *name);
 
 /* Where the config lives. Exposed so the diagnostics can name it. */
 const char *config_path(void);

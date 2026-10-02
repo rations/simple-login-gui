@@ -11,7 +11,7 @@
 // login screen -- the real fonts, the real strings, the real clearances -- with no X server
 // running. Keystrokes arrive as gfx/keys.h values that the window has already translated.
 //
-// The panel is a fixed 420x300 box centred on the primary output. It does not know what a
+// The panel is a fixed 420x320 box centred on the primary output. It does not know what a
 // session is, what PAM is, or that a machine can be shut down: it reports that a button was
 // pressed and its owner decides what that means.
 
@@ -43,6 +43,10 @@ public:
         std::function<void()> options;
         // A menu row was activated, past its confirmation step if it had one.
         std::function<void(const MenuItem &)> menuAction;
+        // The automatic-login box was ticked or unticked, with its new state. The owner
+        // decides what that means -- in particular that ticking it writes nothing until a
+        // login succeeds, and unticking it writes at once. The panel only draws the box.
+        std::function<void(bool checked)> autologinToggled;
     };
     Callbacks cb;
 
@@ -80,6 +84,17 @@ public:
     {
         mBackground = image;
         mBgMode = mode;
+    }
+
+    // The automatic-login box. Setting it does NOT fire autologinToggled; that is for the
+    // user's own clicks, so the owner can tell the two apart.
+    void setAutologinChecked(bool on)
+    {
+        mAuto.checked = on;
+    }
+    bool autologinChecked() const
+    {
+        return mAuto.checked;
     }
 
     // Back to the state the login screen starts in: password erased, status cleared, controls
@@ -125,10 +140,11 @@ private:
     // The keyboard focus ring. The BUTTONS are in it, not just the fields, and that is the
     // point: the Options menu is this screen's escape route, and an escape route reachable
     // only with a pointer is no use to somebody whose pointer is the reason they need it.
-    enum class Focus { User, Pass, Options, Login };
+    enum class Focus { User, Pass, Autologin, Options, Login };
 
     void setFocus(Focus f);
     void focusNext(int delta);
+    void toggleAutologin();
 
     Focus mFocus = Focus::User;
 
@@ -140,7 +156,7 @@ private:
     // includes both this header and Xlib.h, so `Target::None` expands to `Target::0L` there.
     // Second time this project has hit it, in a header that does not itself include any X
     // header -- which is the part that makes it easy to hit. See also Key::Plain.
-    enum class Target { Nothing, User, Pass, Options, Login, MenuRow, MenuOutside };
+    enum class Target { Nothing, User, Pass, Autologin, Options, Login, MenuRow, MenuOutside };
     Target targetAt(float x, float y, int &row) const;
 
     Target mPressTarget = Target::Nothing;
@@ -151,6 +167,7 @@ private:
 
     TextField mUser;
     TextField mPass;
+    Checkbox mAuto;
     Button mLogin;
     Button mOptions;
 

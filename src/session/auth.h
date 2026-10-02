@@ -41,8 +41,21 @@ typedef struct {
  * failure everything is already torn down and there is nothing to close. */
 auth_result auth_login(const char *user, const char *password);
 
-/* Close the session opened by a successful auth_login(): pam_close_session, then
- * pam_setcred(PAM_DELETE_CRED), then pam_end, in that order. A no-op when nothing is open, so
+/* Open a session for `user` WITHOUT a password, through the xlogin-autologin PAM service.
+ *
+ * For the automatic login only. The caller is trusted to have checked that `user` came from
+ * XLOGIN_AUTOLOGIN in a root-owned, root-only-writable /etc/xlogin.conf, which is only ever
+ * written with a name after that user has authenticated through auth_login(). It still refuses
+ * an unknown user and uid 0 itself, before pam_start, because this is the function that skips
+ * the password and it should not depend on its caller for that. pam_acct_mgmt still runs, so
+ * an expired or locked account is refused here exactly as it is at the password prompt.
+ *
+ * Success and failure leave the same state as auth_login(): on success, auth_close_session()
+ * must eventually be called. */
+auth_result auth_autologin(const char *user);
+
+/* Close the session opened by a successful auth_login() or auth_autologin(): pam_close_session,
+ * then pam_setcred(PAM_DELETE_CRED), then pam_end, in that order. A no-op when nothing is open, so
  * it is safe on every exit path. */
 void auth_close_session(void);
 

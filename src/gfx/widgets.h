@@ -3,7 +3,7 @@
 // Not the sibling project's widgets: see ink.h for why those could not be ported. What carries
 // over is the idiom recorded there -- a kWellColor rounded fill, an optional accent wash, and a
 // 1px inkFor() outline whose alpha is the entire hover treatment -- and this file applies it to
-// the one control shape this window actually has.
+// the two control shapes this window actually has.
 //
 // Unlike the widgets it takes its look from, a Button CARRIES ITS RECT. It is positioned from
 // geometry.h by whoever lays the panel out, and it hit-tests against the same rect it draws, so
@@ -39,6 +39,32 @@ struct Button {
     bool hit(float x, float y) const
     {
         return enabled && rect.contains(x, y);
+    }
+};
+
+// A checkbox and its label. Drawn the way CPU-Power's Checkbox::draw draws one -- the well, the
+// inkFor() outline at the hover alpha, a two-stroke tick in kAccentBright -- but carrying its
+// own rects, like Button, rather than reading them out of a geometry header.
+struct Checkbox {
+    // The box itself, which is what is drawn.
+    Rect box;
+    // The box and the label together, padded to a usable height: what a click is tested
+    // against. Set by whoever lays the panel out, because its width is the label's measured
+    // width.
+    Rect hitRect;
+    std::string label;
+    float labelX = 0.0f;
+    float labelBaseline = 0.0f;
+
+    bool checked = false;
+    bool enabled = true;
+    bool hovered = false;
+
+    void draw(Canvas &c) const;
+
+    bool hit(float x, float y) const
+    {
+        return enabled && hitRect.contains(x, y);
     }
 };
 

@@ -6,7 +6,7 @@
 // coordinates are divided by that same scale before they reach a hit test. So a constant in
 // this file means the same thing whether the screen is 1366x768 or 4K.
 //
-// THE PANEL IS A FIXED 420x300 BOX CENTRED ON THE PRIMARY OUTPUT. It does not stretch with the
+// THE PANEL IS A FIXED 420x320 BOX CENTRED ON THE PRIMARY OUTPUT. It does not stretch with the
 // screen: a login form stretched across a 34" monitor puts the username field a foot away from
 // the password field. What scales is the unit, not the layout.
 //
@@ -41,9 +41,16 @@ constexpr float nominalDescent(float size)
 
 //--- the panel ------------------------------------------------------------------------------
 constexpr float kPanelW = 420.0f;
-constexpr float kPanelH = 300.0f;
+// 320, not the original 300: the extra 20 is the automatic-login checkbox row between the
+// password field and the status line, and nothing above that row moved.
+constexpr float kPanelH = 320.0f;
 constexpr float kMargin = 16.0f;
 constexpr float kPanelRadius = 6.0f;
+
+// A label's baseline inside a box that is meant to look vertically centred. 0.36 of the font
+// size below the geometric centre, which is the sibling projects' constant -- optical centring,
+// because a line of text has more ink above its centre than below it.
+constexpr float kLabelBaselineBias = 0.36f;
 
 // The gold hairline is drawn at this alpha, the same understated weight the sibling projects
 // use for the line under a title -- at full strength it reads as a border rather than a rule.
@@ -84,9 +91,30 @@ constexpr float kDotPitch = 9.0f;
 // A 1px line, because anything thicker sits between two characters rather than at a position.
 constexpr float kCaretW = 1.0f;
 
+//--- the automatic-login checkbox ---------------------------------------------------------
+// The sibling CPU-Power panel's checkbox, at its own measurements (read from that project's
+// geometry.h and widgets.cpp, not recalled): a 15-unit box with a 3-unit radius, the label 9
+// units right of it in body text at 11, baseline at the box's centre plus 0.36 of the size,
+// and a hit rect 22 tall starting 4 above the box. Left-aligned with the fields.
+constexpr float kCheckBox = 15.0f;
+constexpr float kCheckX = kFieldX;
+constexpr float kCheckY = 197.0f;
+constexpr float kCheckRadius = 3.0f;
+constexpr float kCheckLabelSize = 11.0f;
+constexpr float kCheckLabelGap = 9.0f;
+constexpr float kCheckLabelX = kCheckX + kCheckBox + kCheckLabelGap;
+constexpr float kCheckLabelBaselineY =
+    kCheckY + kCheckBox * 0.5f + kCheckLabelSize * kLabelBaselineBias;
+// The hit rect covers the box AND its label, because a 15-unit box on its own is not a target.
+// A fixed width, as CPU-Power's is: tools/uirender measures the real label against it and
+// fails if the label is wider, so the click target cannot quietly end mid-word.
+constexpr float kCheckHitTop = kCheckY - 4.0f;
+constexpr float kCheckHitH = 22.0f;
+constexpr float kCheckHitW = 180.0f;
+
 //--- status line --------------------------------------------------------------------------
 constexpr float kStatusSize = 11.0f;
-constexpr float kStatusBaselineY = 206.0f;
+constexpr float kStatusBaselineY = 232.0f;
 constexpr float kStatusX = kMargin;
 constexpr float kStatusW = kPanelW - 2.0f * kMargin;
 
@@ -101,11 +129,6 @@ constexpr float kLoginX = kPanelW - kMargin - kLoginW;
 
 constexpr float kOptionsW = 110.0f;
 constexpr float kOptionsX = kMargin;
-
-// A label's baseline inside a box that is meant to look vertically centred. 0.36 of the font
-// size below the geometric centre, which is the sibling projects' constant -- optical centring,
-// because a line of text has more ink above its centre than below it.
-constexpr float kLabelBaselineBias = 0.36f;
 
 //--- the Options menu -----------------------------------------------------------------------
 //
@@ -167,10 +190,25 @@ static_assert(fieldTextBaseline(kUserFieldY) + nominalDescent(kFieldTextSize) <
                   kUserFieldY + kFieldH,
               "field text would be clipped by the bottom of its well");
 
-// The status line must clear the password field above it and the button row below it. This is
-// the tightest pair in the panel and the one most likely to be broken by an edit.
-static_assert(kPassFieldY + kFieldH < kStatusBaselineY - nominalAscent(kStatusSize),
-              "the password field and the status line would collide");
+// The checkbox row sits between the password field and the status line, and must clear both --
+// box and label, hit rect included, because a hit rect overlapping the password field would
+// steal the click that was meant to focus it.
+static_assert(kPassFieldY + kFieldH < kCheckHitTop,
+              "the checkbox's hit rect would reach into the password field");
+static_assert(kCheckLabelBaselineY - nominalAscent(kCheckLabelSize) > kPassFieldY + kFieldH,
+              "the checkbox label would collide with the password field");
+static_assert(kCheckHitTop + kCheckHitH < kStatusBaselineY - nominalAscent(kStatusSize),
+              "the checkbox's hit rect and the status line would collide");
+static_assert(kCheckLabelBaselineY + nominalDescent(kCheckLabelSize) <
+                  kStatusBaselineY - nominalAscent(kStatusSize),
+              "the checkbox label and the status line would collide");
+static_assert(kCheckLabelX > kCheckX + kCheckBox, "the checkbox label would overlap its box");
+static_assert(kCheckHitH >= kCheckBox, "the checkbox's hit rect is smaller than the box");
+static_assert(kCheckX + kCheckHitW <= kPanelW - kMargin,
+              "the checkbox's hit rect overruns the panel");
+
+// The status line must clear the row above it and the button row below it. This is the
+// tightest pair in the panel and the one most likely to be broken by an edit.
 static_assert(kStatusBaselineY + nominalDescent(kStatusSize) < kButtonY,
               "the status line's descenders would cross into the button row");
 

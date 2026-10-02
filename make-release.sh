@@ -125,6 +125,7 @@ LICENSE
 NOTICE
 etc/init.d/xlogin-launcher
 etc/pam.d/xlogin
+etc/pam.d/xlogin-autologin
 etc/polkit-1/rules.d/10-local.rules
 usr/local/bin/xlogin
 usr/local/bin/xlogin-launcher

@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +38,29 @@ void config_defaults(xlogin_config *c)
     c->console_vt = 2;
 }
 
+int config_valid_username(const char *name)
+{
+    size_t i;
+    int all_digits = 1;
+
+    if (!name || !name[0] || name[0] == '-')
+        return 0;
+    for (i = 0; name[i]; i++) {
+        const char ch = name[i];
+        if (i >= LOGIN_NAME_MAX - 1)
+            return 0;
+        if (ch >= '0' && ch <= '9')
+            continue;
+        all_digits = 0;
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' || ch == '-')
+            continue;
+        if (ch == '$' && name[i + 1] == '\0' && i > 0)
+            continue;
+        return 0;
+    }
+    return !all_digits;
+}
+
 /* Strip one layer of matching quotes and trailing whitespace, in place. The same shape as the
  * launcher's shell would see, and the same shape load_locale_env() uses on /etc/default/locale
  * -- one parser idiom in this program, not two. */
@@ -58,6 +82,7 @@ void config_load(xlogin_config *c)
     FILE *fp;
     char line[CFG_MAX_LINE];
     long total = 0;
+    int trusted = 0;
 
     if (!c)
         return;
@@ -66,6 +91,17 @@ void config_load(xlogin_config *c)
     fp = fopen(XLOGIN_CONFIG_PATH, "re");
     if (!fp)
         return; /* no file is not an error: the defaults are the answer */
+
+    /* XLOGIN_AUTOLOGIN logs somebody in WITHOUT A PASSWORD, so it is honoured only from a file
+     * nobody but root could have written. Checked on the open descriptor rather than the path,
+     * so the file judged is the file read. The other keys are still read from a file that
+     * fails this: they choose a wallpaper and a VT, and the launcher has already sourced the
+     * same file as root, so refusing them would protect nothing. */
+    {
+        struct stat st;
+        trusted = fstat(fileno(fp), &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == 0 &&
+                  (st.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+    }
 
     while (fgets(line, sizeof(line), fp)) {
         char *p = line;
@@ -111,6 +147,21 @@ void config_load(xlogin_config *c)
                         "xlogin: XLOGIN_CONSOLE_VT=%s is not a VT number 1-63; "
                         "using %d\n",
                         val, c->console_vt);
+        } else if (strcmp(key, "XLOGIN_AUTOLOGIN") == 0) {
+            if (!val[0]) {
+                c->autologin[0] = '\0';
+            } else if (!trusted) {
+                fprintf(stderr,
+                        "xlogin: %s is not owned by root or is writable by others; ignoring "
+                        "XLOGIN_AUTOLOGIN\n",
+                        XLOGIN_CONFIG_PATH);
+                c->autologin[0] = '\0';
+            } else if (!config_valid_username(val)) {
+                fprintf(stderr, "xlogin: XLOGIN_AUTOLOGIN is not a valid username; ignoring it\n");
+                c->autologin[0] = '\0';
+            } else {
+                snprintf(c->autologin, sizeof(c->autologin), "%s", val);
+            }
         }
     }
 

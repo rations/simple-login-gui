@@ -5,6 +5,9 @@
 /tools/uirender
 *.o
 *.d
+# ...which also matches the pam.d DIRECTORY, so a new PAM file there would be silently left
+# out of every commit. pam.d/xlogin only escaped it by being tracked before this rule existed.
+!/pam.d/
 *.so
 *.a
 build/
